@@ -11,17 +11,11 @@ jobs:
       matrix:
         python-version: ['3.7', '3.8', '3.9', '3.10']
     steps:
-    - uses: messense/maturin-action@v1
-      with:
-        command: list-python    
     - uses: actions/checkout@v2
     - uses: actions/setup-python@v2
       with:
         python-version: ${{ matrix.python-version }}
         architecture: x64
-    - uses: messense/maturin-action@v1
-      with:
-        command: list-python
     - uses: messense/maturin-action@v1
       with:
         manylinux: auto
@@ -43,18 +37,12 @@ jobs:
     strategy:
       matrix:
         python-version: ['3.7', '3.8', '3.9', '3.10']
-    steps:
-    - uses: messense/maturin-action@v1
-      with:
-        command: list-python    
+    steps: 
     - uses: actions/checkout@v2
     - uses: actions/setup-python@v2
       with:
         python-version: ${{ matrix.python-version }}
         architecture: x64
-    - uses: messense/maturin-action@v1
-      with:
-        command: list-python
     - name: Set PYTHON_PATH Environment Variable
       run: |
         $python_path = python -c "import sys; print(sys.executable)"
@@ -62,7 +50,7 @@ jobs:
     - uses: messense/maturin-action@v1
       with:
         command: build
-        args: --release --no-sdist -o dist --interpreter ${{ env.pythonLocation }}\python.exe
+        args: --release --no-sdist -o dist --interpreter ${{ env.PYTHON_PATH }}
     - name: Run tests
       run: |
         pip install bytewax --find-links dist -v
@@ -80,17 +68,11 @@ jobs:
       matrix:
         python-version: ['3.7', '3.8', '3.9', '3.10']
     steps:
-    - uses: messense/maturin-action@v1
-      with:
-        command: list-python
     - uses: actions/checkout@v2    
     - uses: actions/setup-python@v2
       with:
         python-version: ${{ matrix.python-version }}
         architecture: x64
-    - uses: messense/maturin-action@v1
-      with:
-        command: list-python
     - uses: messense/maturin-action@v1
       with:
         command: build
