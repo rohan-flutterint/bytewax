@@ -55,10 +55,13 @@ jobs:
     - uses: messense/maturin-action@v1
       with:
         command: list-python
+    - name: Set PYTHON_PATH Environment Variable
+      run: |
+        FOR /F "tokens=* USEBACKQ" %g IN (`python -c "import sys; print(sys.executable)"`) do (SET "PYTHON_PATH=%g")
     - uses: messense/maturin-action@v1
       with:
         command: build
-        args: --release --no-sdist -o dist --interpreter python${{ matrix.python-version }}
+        args: --release --no-sdist -o dist --interpreter %PYTHON_PATH%
     - name: Run tests
       run: |
         pip install bytewax --find-links dist -v
