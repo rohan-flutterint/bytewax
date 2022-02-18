@@ -57,7 +57,7 @@ jobs:
         command: list-python
     - name: Set PYTHON_PATH Environment Variable
       run: |
-        FOR /F "tokens=* USEBACKQ" %g IN (`python -c "import sys; print(sys.executable)"`) do (SET "PYTHON_PATH=%g")
+        FOR /F ("tokens=* USEBACKQ" %g) IN (`python -c "import sys; print(sys.executable)"`) do (SET "PYTHON_PATH=%g")
     - uses: messense/maturin-action@v1
       with:
         command: build
