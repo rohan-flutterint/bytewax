@@ -18,6 +18,9 @@ jobs:
         architecture: x64
     - uses: messense/maturin-action@v1
       with:
+        command: list-python
+    - uses: messense/maturin-action@v1
+      with:
         manylinux: auto
         command: build
         args: --release -o dist
@@ -45,6 +48,9 @@ jobs:
         architecture: x64
     - uses: messense/maturin-action@v1
       with:
+        command: list-python
+    - uses: messense/maturin-action@v1
+      with:
         command: build
         args: --release --no-sdist -o dist
     - name: Run tests
@@ -69,6 +75,9 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
         architecture: x64
+    - uses: messense/maturin-action@v1
+      with:
+        command: list-python
     - uses: messense/maturin-action@v1
       with:
         command: build
