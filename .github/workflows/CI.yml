@@ -26,7 +26,7 @@ jobs:
       with:
         manylinux: auto
         command: build
-        args: --release -o dist
+        args: --release -o dist --interpreter python${{ matrix.python-version }}
     - name: Run tests
       run: |
         pip install bytewax --find-links dist -v
@@ -58,7 +58,7 @@ jobs:
     - uses: messense/maturin-action@v1
       with:
         command: build
-        args: --release --no-sdist -o dist
+        args: --release --no-sdist -o dist --interpreter python${{ matrix.python-version }}
     - name: Run tests
       run: |
         pip install bytewax --find-links dist -v
@@ -90,7 +90,7 @@ jobs:
     - uses: messense/maturin-action@v1
       with:
         command: build
-        args: --release --no-sdist -o dist --universal2
+        args: --release --no-sdist -o dist --universal2 --interpreter python${{ matrix.python-version }}
     - name: Run tests
       run: |
         pip install bytewax --find-links dist -v
