@@ -20,6 +20,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use chitchat::Chitchat;
+use chitchat::FailureDetectorConfig;
+use chitchat::NodeId;
+use chitchat::server::ChitchatServer;
 use pyo3::basic::CompareOp;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -27,6 +31,7 @@ use timely::dataflow::operators::aggregation::*;
 use timely::dataflow::operators::*;
 use timely::dataflow::InputHandle;
 use timely::dataflow::ProbeHandle;
+use tokio::runtime::Runtime;
 
 use crate::dataflow::{Dataflow, Step};
 use crate::operators::build;
@@ -245,6 +250,58 @@ where
             Err("Dataflow needs to contain at least one capture".into())
         }
     })
+}
+
+
+pub(crate) struct ClusterMembership {
+    process_count: usize,    
+    chitchat: Arc<tokio::sync::Mutex<Chitchat>>,
+    rt: Runtime,
+}
+
+impl ClusterMembership {
+    pub(crate) fn new(address: &str, seeds: Vec<String>, process_count: usize) -> Self {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let chitchat = rt.block_on(async {
+            let chitchat_server = ChitchatServer::spawn(
+                NodeId::from(address),
+                &seeds[..],
+                address,
+                "bytewax".to_string(),
+                Vec::<(&str, &str)>::new(),
+                FailureDetectorConfig::default(),
+            );
+            chitchat_server.chitchat()
+        });
+        
+        Self {
+            process_count,
+            chitchat,
+            rt
+        }
+        
+    }
+
+    pub(crate) fn wait_for_members(&self) {
+        self.rt.block_on(async {
+            while self.chitchat.lock().await.live_nodes().count() != self.process_count {
+                dbg!(self.chitchat.lock().await.live_nodes().count());
+                continue;
+            }
+        });
+    }
+    
+    pub(crate) fn addresses(&self) -> Vec<String> {
+        let addresses = self.rt.block_on(async {
+            self.chitchat.lock().await.live_nodes().cloned().collect::<Vec<_>>()
+        });
+
+        addresses.iter().map(|a| a.gossip_public_address.to_string()).collect()
+    }
 }
 
 
@@ -560,27 +617,32 @@ pub(crate) fn run_main(
     flow,
     input_builder,
     output_builder,
-    addresses,
+    address,
+    seeds,
     proc_id,
     "*",
     recovery_config = "None",
     worker_count_per_proc = "1"
 )]
 #[pyo3(
-    text_signature = "(flow, input_builder, output_builder, addresses, proc_id, *, recovery_config, worker_count_per_proc)"
+    text_signature = "(flow, input_builder, output_builder, address, seeds, process_count, proc_id, *, recovery_config, worker_count_per_proc)"
 )]
 pub(crate) fn cluster_main(
     py: Python,
     flow: Py<Dataflow>,
     input_builder: TdPyCallable,
     output_builder: TdPyCallable,
-    addresses: Option<Vec<String>>,
+    address: String,
+    seeds: Vec<String>,
+    process_count: usize,
     proc_id: usize,
     recovery_config: Option<Py<RecoveryConfig>>,
     worker_count_per_proc: usize,
 ) -> PyResult<()> {
     py.allow_threads(move || {
-        let addresses = addresses.unwrap_or_default();
+        let cluster_membership = ClusterMembership::new(&address, seeds, process_count);
+        cluster_membership.wait_for_members();
+        let addresses = cluster_membership.addresses();
         let (builders, other) = if addresses.len() < 1 {
             timely::CommunicationConfig::Process(worker_count_per_proc)
         } else {
