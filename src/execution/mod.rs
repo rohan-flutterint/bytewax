@@ -20,15 +20,17 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use chitchat::Chitchat;
+use chitchat::server::ChitchatServer;
 use chitchat::FailureDetectorConfig;
 use chitchat::NodeId;
-use chitchat::server::ChitchatServer;
 use pyo3::basic::CompareOp;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use timely::dataflow::operators::aggregation::*;
 use timely::dataflow::operators::*;
+use retry::delay::Exponential;
+use retry::retry;
+use retry::OperationResult;
 use timely::dataflow::InputHandle;
 use timely::dataflow::ProbeHandle;
 use tokio::runtime::Runtime;
@@ -252,58 +254,84 @@ where
     })
 }
 
-
 pub(crate) struct ClusterMembership {
-    process_count: usize,    
-    chitchat: Arc<tokio::sync::Mutex<Chitchat>>,
+    process_count: usize,
+    chitchat_server: ChitchatServer,
     rt: Runtime,
 }
 
 impl ClusterMembership {
     pub(crate) fn new(address: &str, seeds: Vec<String>, process_count: usize) -> Self {
-        let rt = tokio::runtime::Builder::new_current_thread()
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
             .enable_all()
             .build()
             .unwrap();
 
-        let chitchat = rt.block_on(async {
-            let chitchat_server = ChitchatServer::spawn(
+        let chitchat_server = rt.block_on(async {
+            ChitchatServer::spawn(
                 NodeId::from(address),
                 &seeds[..],
                 address,
                 "bytewax".to_string(),
                 Vec::<(&str, &str)>::new(),
                 FailureDetectorConfig::default(),
-            );
-            chitchat_server.chitchat()
+            )
         });
-        
+
         Self {
             process_count,
-            chitchat,
-            rt
+            chitchat_server,
+            rt,
         }
-        
     }
 
-    pub(crate) fn wait_for_members(&self) {
-        self.rt.block_on(async {
-            while self.chitchat.lock().await.live_nodes().count() != self.process_count {
-                dbg!(self.chitchat.lock().await.live_nodes().count());
-                continue;
-            }
+    pub(crate) fn wait_for_members(&self) -> PyResult<()> {
+        let res = retry(Exponential::from_millis(10), || {
+            self.rt.block_on(async {
+                let node_count = self
+                    .chitchat_server
+                    .chitchat()
+                    .lock()
+                    .await
+                    .live_nodes()
+                    .count();
+
+                if Python::with_gil(|py| Python::check_signals(py)).is_err() {
+                    return OperationResult::Err("ctrl-c");
+                } else if node_count != self.process_count - 1 {
+                    return OperationResult::Retry(
+                        "Process count does not match the number of live nodes",
+                    );
+                } else {
+                    return OperationResult::Ok(());
+                }
+            })
         });
+
+        res.map_err(|_err| {
+            PyRuntimeError::new_err("Exiting while waiting for other nodes to join the cluster.")
+        })
     }
-    
+
     pub(crate) fn addresses(&self) -> Vec<String> {
         let addresses = self.rt.block_on(async {
-            self.chitchat.lock().await.live_nodes().cloned().collect::<Vec<_>>()
+            self.chitchat_server
+                .chitchat()
+                .lock()
+                .await
+                .cluster_state()
+                .nodes()
+                .cloned()
+                .collect::<Vec<_>>()
         });
 
-        addresses.iter().map(|a| a.gossip_public_address.to_string()).collect()
+        addresses
+            .iter()
+            .map(|a| a.gossip_public_address.to_string())
+            .collect()
     }
 }
-
 
 /// Advance to the supplied epoch.
 ///
@@ -641,8 +669,10 @@ pub(crate) fn cluster_main(
 ) -> PyResult<()> {
     py.allow_threads(move || {
         let cluster_membership = ClusterMembership::new(&address, seeds, process_count);
-        cluster_membership.wait_for_members();
+        cluster_membership.wait_for_members()?;
         let addresses = cluster_membership.addresses();
+        drop(cluster_membership);
+
         let (builders, other) = if addresses.len() < 1 {
             timely::CommunicationConfig::Process(worker_count_per_proc)
         } else {
