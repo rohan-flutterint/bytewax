@@ -423,7 +423,7 @@ impl OutputWriter<u64, TdPyAny> for StdOutput {
 /// connection.
 struct WebSocketOutput {
     _rt: Runtime,
-    tx: tokio::sync::watch::Sender<String>,
+    tx: tokio::sync::broadcast::Sender<String>,
 }
 
 impl WebSocketOutput {
@@ -434,12 +434,15 @@ impl WebSocketOutput {
             .build()
             .unwrap();
 
-        let (tx, rx) = tokio::sync::watch::channel("".into());
-
+        // Broadcast channels work by "subscribing" to the tx, which
+        // you can clone freely. So keep a handle to the tx around and
+        // subscribe to that whenever someone connects.
+        let (tx, _rx) = tokio::sync::broadcast::channel(1);
+        let subscribe_tx = tx.clone();
         rt.spawn(async move {
             let app = Router::new()
                 .route(&route, routing::get(Self::handle_http_request))
-                .layer(Extension(rx));
+                .layer(Extension(subscribe_tx));
 
             axum::Server::bind(&socket_addr)
                 .serve(app.into_make_service())
@@ -452,14 +455,16 @@ impl WebSocketOutput {
 
     async fn handle_http_request(
         request: WebSocketUpgrade,
-        Extension(rx): Extension<tokio::sync::watch::Receiver<String>>,
+        Extension(subscribe_tx): Extension<tokio::sync::broadcast::Sender<String>>,
     ) -> Response {
-        request.on_upgrade(|socket| Self::socket_main(socket, rx))
+        request.on_upgrade(move |socket| {
+            let rx = subscribe_tx.subscribe();
+            Self::socket_main(socket, rx)
+        })
     }
 
-    async fn socket_main(mut socket: WebSocket, mut rx: tokio::sync::watch::Receiver<String>) {
-        while rx.changed().await.is_ok() {
-            let item_str = rx.borrow().clone();
+    async fn socket_main(mut socket: WebSocket, mut rx: tokio::sync::broadcast::Receiver<String>) {
+        while let Ok(item_str) = rx.recv().await {
             let msg = Message::Text(item_str);
             if socket.send(msg).await.is_err() {
                 return;
@@ -477,9 +482,9 @@ impl OutputWriter<u64, TdPyAny> for WebSocketOutput {
                 .expect("Items written to websockets need to implement `__str__`")
                 .extract()
                 .unwrap();
-            self.tx
-                .send(item_str.to_string())
-                .expect("Error sending output item to websockets");
+            // Ignore the result of sending since we don't care if
+            // there are no clients currently.
+            let _ = self.tx.send(item_str.to_string());
         });
     }
 }
