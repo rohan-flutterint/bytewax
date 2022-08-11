@@ -15,10 +15,8 @@
 //! want. E.g. [`StdOutputConfig`] represents a token in Python for
 //! how to create a [`StdOutputWriter`].
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
 use crate::{
-    pyo3_extensions::{TdPyAny, TdPyCallable},
+    pyo3_extensions::{PySocketAddr, TdPyAny, TdPyCallable},
     with_traceback,
 };
 use axum::{
@@ -27,6 +25,7 @@ use axum::{
     routing, Extension, Router,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
+use std::net::SocketAddr;
 use tokio::runtime::{self, Runtime};
 
 /// Base class for an output config.
@@ -215,27 +214,6 @@ impl StdOutputConfig {
     }
 }
 
-///
-#[derive(Clone)]
-struct PySocketAddr(SocketAddr);
-
-impl FromPyObject<'_> for PySocketAddr {
-    fn extract<'source>(ob: &'source PyAny) -> PyResult<Self> {
-        let s = ob.str()?.to_str()?;
-        Ok(PySocketAddr(s.parse().map_err(|_err| {
-            PyValueError::new_err(format!(
-                "wanted `\"address:port\"` string; got `{s:?}` instead"
-            ))
-        })?))
-    }
-}
-
-impl IntoPy<PyObject> for PySocketAddr {
-    fn into_py(self, py: Python<'_>) -> PyObject {
-        format!("{}", self.0).into_py(py)
-    }
-}
-
 /// Start a HTTP server and broadcast all captured output items to all
 /// websocket clients.
 ///
@@ -285,10 +263,7 @@ impl WebSocketOutputConfig {
     /// Egregious hack see [`SqliteRecoveryConfig::__getnewargs__`].
     fn __getnewargs__(&self) -> (PySocketAddr, &str) {
         let s = "UNINIT_PICKLED_STRING";
-        (
-            PySocketAddr(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0)),
-            s,
-        )
+        (PySocketAddr::pickle_new(), s)
     }
 
     /// Unpickle from tuple of arguments.

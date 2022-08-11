@@ -4,6 +4,7 @@
 use crate::with_traceback;
 use pyo3::basic::CompareOp;
 use pyo3::exceptions::PyTypeError;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::*;
 use serde::ser::Error;
@@ -22,6 +23,9 @@ use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::net::IpAddr;
+use std::net::Ipv4Addr;
+use std::net::SocketAddr;
 use std::ops::Deref;
 use std::task::Poll;
 
@@ -386,5 +390,35 @@ impl TdPyCallable {
 
     pub(crate) fn call1(&self, py: Python, args: impl IntoPy<Py<PyTuple>>) -> PyResult<Py<PyAny>> {
         self.0.call1(py, args)
+    }
+}
+
+/// A Python string that represents a `"address:port"` combo and does
+/// validation.
+#[derive(Clone)]
+pub(crate) struct PySocketAddr(pub(crate) SocketAddr);
+
+impl PySocketAddr {
+    /// Create an empty [`Self`] just for use in `__getnewargs__`.
+    #[allow(dead_code)]
+    pub(crate) fn pickle_new() -> Self {
+        PySocketAddr(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0))
+    }
+}
+
+impl FromPyObject<'_> for PySocketAddr {
+    fn extract<'source>(ob: &'source PyAny) -> PyResult<Self> {
+        let s = ob.str()?.to_str()?;
+        Ok(PySocketAddr(s.parse().map_err(|_err| {
+            PyValueError::new_err(format!(
+                "wanted `\"address:port\"` string; got `{s:?}` instead"
+            ))
+        })?))
+    }
+}
+
+impl IntoPy<PyObject> for PySocketAddr {
+    fn into_py(self, py: Python<'_>) -> PyObject {
+        format!("{}", self.0).into_py(py)
     }
 }

@@ -19,7 +19,7 @@ use crate::recovery::StateWriter;
 use crate::recovery::{build_recovery_readers, build_recovery_writers, FrontierUpdate};
 use crate::recovery::{default_recovery_config, ProgressWriter};
 use crate::recovery::{ProgressReader, StateCollector};
-use crate::window::{build_clock, build_windower, reduce_window, StatefulWindowUnary, fold_window};
+use crate::window::{build_clock, build_windower, fold_window, reduce_window, StatefulWindowUnary};
 use log::debug;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -436,7 +436,13 @@ fn build_production_dataflow<A: Allocate>(
                 Step::Filter { predicate } => {
                     stream = stream.filter(move |item| filter(&predicate, item));
                 }
-                Step::FoldWindow { step_id, clock_config, window_config, builder, folder } => {
+                Step::FoldWindow {
+                    step_id,
+                    clock_config,
+                    window_config,
+                    builder,
+                    folder,
+                } => {
                     let windower = build_windower(py, window_config)?;
                     let clock = build_clock(py, clock_config)?;
 
