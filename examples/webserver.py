@@ -1,12 +1,16 @@
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
+
 from bytewax.dataflow import Dataflow
 from bytewax.execution import cluster_main
 from bytewax.inputs import WebServerInputConfig
 from bytewax.outputs import StdOutputConfig
 from bytewax.tracing import setup_tracing
 
-tracer = setup_tracing(
-    log_level="TRACE",
-)
+classifier = pipeline("summarization")
+
+# tracer = setup_tracing(
+#     log_level="TRACE",
+# )
 
 
 def input_builder(worker_index, worker_count, resume_state):
@@ -16,9 +20,14 @@ def input_builder(worker_index, worker_count, resume_state):
     return handler
 
 
+def summarize(text):
+    return classifier(text)
+
+
 flow = Dataflow()
 flow.input("input", WebServerInputConfig(input_builder))
-flow.map(lambda x: f"<dance>{x}</dance>")
+flow.map(summarize)
+flow.map(lambda x: x[0]["summary_text"])
 flow.capture(StdOutputConfig())
 
 
