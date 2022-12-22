@@ -1,7 +1,12 @@
 use std::{sync::Mutex, task::Poll};
 
-use axum::{extract::Extension, response::IntoResponse, routing::post, Router};
-use pyo3::{prelude::*, types::PyDict};
+use axum::{
+    body::Bytes, extract::Extension, http::HeaderMap, response::IntoResponse, routing::get, Router,
+};
+use pyo3::{
+    prelude::*,
+    types::{PyBytes, PyDict, PyTuple},
+};
 use std::{
     collections::{HashMap, VecDeque},
     net::SocketAddr,
@@ -96,7 +101,7 @@ impl InputBuilder for WebServerInputConfig {
         });
 
         let app = Router::new()
-            .route("/", post(run_handler))
+            .route("/", get(run_handler))
             .layer(Extension(shared_state));
 
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -150,14 +155,33 @@ impl InputReader<TdPyAny> for WebServerInput {
     }
 }
 
-async fn run_handler(Extension(state): Extension<Arc<State>>, body: String) -> impl IntoResponse {
+async fn run_handler(
+    Extension(state): Extension<Arc<State>>,
+    body: Bytes,
+    headers: HeaderMap,
+) -> impl IntoResponse {
     Python::with_gil(|py| {
-        let resp = state.handler.call1(py, (body.into_py(py),));
+        let mut header_hashmap = HashMap::new();
+        for (k, v) in headers {
+            let k = k.expect("Error, no header name").as_str().to_owned();
+            let v = String::from_utf8_lossy(v.as_bytes()).into_owned();
+            header_hashmap.entry(k).or_insert_with(Vec::new).push(v)
+        }
+        let res = state
+            .handler
+            .call1(py, (header_hashmap.into_py(py), body.into_py(py)))
+            .unwrap();
+        let pytuple: &PyTuple = res.as_ref(py).downcast().unwrap();
+        let (http_response, dataflow_response): (&PyAny, &PyAny) = pytuple.extract().unwrap();
+        // Push the dataflow response on to our queue for processing by the dataflow
         state
             .requests
             .lock()
             .unwrap()
-            .push_back(resp.unwrap().into());
-    });
-    "ok"
+            .push_back(dataflow_response.into());
+        // Return the first argument from the handler function as an http response
+        // by turning into bytes
+        let http_response: &PyBytes = http_response.downcast().unwrap();
+        http_response.extract::<Vec<u8>>().unwrap()
+    })
 }
