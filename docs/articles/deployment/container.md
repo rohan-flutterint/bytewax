@@ -2,18 +2,19 @@ It is very simple to run a Bytewax dataflow program in a container. In this sect
 
 ## Bytewax Images in Docker Hub
 
-Bytewax has several public container images available. Every library release is available in Docker Hub with these python versions: 3.7, 3.8, 3.9 and 3.10.
+Bytewax has several public container images available. Every library release is available in Docker Hub with these python versions: 3.7, 3.8, 3.9, 3.10 and 3.11.
 
 We implement the following naming convention:
 
 >**bytewax/bytewax:`BYTEWAX_VERSION`-python`PYTHON_VERSION`**
 
-Following this convention, Bytewax `0.8.0` would have the images:
+Following this convention, Bytewax `0.14.0` would have the images:
 ```
-bytewax/bytewax:0.8.0-python3.7
-bytewax/bytewax:0.8.0-python3.8
-bytewax/bytewax:0.8.0-python3.9
-bytewax/bytewax:0.8.0-python3.10
+bytewax/bytewax:0.14.0-python3.7
+bytewax/bytewax:0.14.0-python3.8
+bytewax/bytewax:0.14.0-python3.9
+bytewax/bytewax:0.14.0-python3.10
+bytewax/bytewax:0.14.0-python3.11
 ```
 
 And for the latest version of Bytewax:
@@ -22,6 +23,7 @@ bytewax/bytewax:latest-python3.7
 bytewax/bytewax:latest-python3.8
 bytewax/bytewax:latest-python3.9
 bytewax/bytewax:latest-python3.10
+bytewax/bytewax:latest-python3.11
 ```
 
 The standard `latest` tag is equivalent to `latest-python3.9`.
@@ -159,7 +161,7 @@ Bytewax image includes a small number of modules installed:
 ```
 Package      Version
 ------------ ---------
-bytewax      0.8.0
+bytewax      0.14.0
 dill         0.3.4
 multiprocess 0.70.12.2
 pip          22.0.4
