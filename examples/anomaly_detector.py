@@ -1,7 +1,7 @@
 import random
 
 from bytewax.dataflow import Dataflow
-from bytewax.execution import spawn_cluster
+from bytewax.execution import run_main
 from bytewax.inputs import PartitionedInput
 from bytewax.outputs import ManualOutputConfig
 
@@ -52,8 +52,6 @@ class ZTestDetector:
 
         self._push(value)
         self._recalc_stats()
-        print(self)
-
         return self, (value, self.mu, self.sigma, is_anomalous)
 
 
@@ -71,11 +69,12 @@ def output_builder(worker_index, worker_count):
     return inspector
 
 
+flow = Dataflow()
+flow.input("inp", RandomMetricInput())
+# ("metric", value)
+flow.stateful_map("AnomalyDetector", lambda: ZTestDetector(2.0), ZTestDetector.push)
+# ("metric", (value, mu, sigma, is_anomalous))
+flow.output(ManualOutputConfig(output_builder))
+
 if __name__ == "__main__":
-    flow = Dataflow()
-    flow.input("inp", RandomMetricInput())
-    # ("metric", value)
-    flow.stateful_map("AnomalyDetector", lambda: ZTestDetector(2.0), ZTestDetector.push)
-    # ("metric", (value, mu, sigma, is_anomalous))
-    flow.capture(ManualOutputConfig(output_builder))
-    spawn_cluster(flow)
+    run_main(flow)

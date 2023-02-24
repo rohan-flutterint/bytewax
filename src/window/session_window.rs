@@ -36,9 +36,7 @@ add_pymethods!(
     SessionWindow,
     parent: WindowConfig,
     py_args: (gap),
-    args {
-        gap: Duration => Duration::zero()
-    }
+    args { gap: Duration => Duration::zero() }
 );
 
 pub(crate) struct SessionWindower {

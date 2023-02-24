@@ -8,6 +8,15 @@ use crate::pyo3_extensions::TdPyAny;
 use crate::recovery::model::*;
 use crate::recovery::operators::{FlowChangeStream, Route};
 use crate::unwrap_any;
+use crate::{
+    errors::{pyerr_chain, ByteErr, ByteResult},
+    execution::{WorkerCount, WorkerIndex},
+    pyo3_extensions::TdPyAny,
+    recovery::{
+        model::{StateBytes, StateKey, StepId, StepStateBytes},
+        operators::Route,
+    },
+};
 use pyo3::exceptions::{PyStopIteration, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use std::cell::Cell;
@@ -107,18 +116,37 @@ impl PartitionedInput {
         index: WorkerIndex,
         worker_count: WorkerCount,
         mut resume_state: StepStateBytes,
-    ) -> PyResult<HashMap<StateKey, StatefulSource>> {
-        let keys: BTreeSet<StateKey> = self.0.call_method0(py, "list_parts")?.extract(py)?;
+    ) -> ByteResult<HashMap<StateKey, StatefulSource>> {
+        let keys: BTreeSet<StateKey> = self
+            .0
+            .call_method0(py, "list_parts")
+            .pyerr::<PyRuntimeError>("error calling 'list_parts'")?
+            .extract(py)
+            .pyerr::<PyValueError>("'list_parts' should return a set of strings (not a list)")?;
+        // let mut keys: Vec<StateKey> = self
+        //     .0
+        //     .call_method0(py, "list_parts")
+        //     .pyerr::<PyRuntimeError>("error calling 'list_parts'")?
+        //     .extract(py)
+        //     .pyerr::<PyValueError>("'list_parts' should return a list of string")?;
+        // .map_err(|err| {
+        //     pyerr_chain::<PyValueError>(
+        //         py,
+        //         "list_parts should return a list of strings",
+        //         &err,
+        //     )
+        // })?;
+        // keys.sort_unstable();
 
         let parts = keys
             .into_iter()
-        // We are using the [`StateKey`] routing hash as the way to
-        // divvy up partitions to workers. This is kinda an abuse of
-        // behavior, but also means we don't have to find a way to
-        // propogate the correct partition:worker mappings into the
-        // restore system, which would be more difficult as we have to
-        // find a way to treat this kind of state key differently. I
-        // might regret this.
+            // We are using the [`StateKey`] routing hash as the way to
+            // divvy up partitions to workers. This is kinda an abuse of
+            // behavior, but also means we don't have to find a way to
+            // propogate the correct partition:worker mappings into the
+            // restore system, which would be more difficult as we have to
+            // find a way to treat this kind of state key differently. I
+            // might regret this.
             .filter(|key| key.is_local(index, worker_count))
             .flat_map(|key| {
                 let state = resume_state
@@ -131,9 +159,33 @@ impl PartitionedInput {
                     Ok(Some(part)) => Some(Ok((key, part))),
                 }
             }).collect::<PyResult<HashMap<StateKey, StatefulSource>>>()?;
+        // =======
+        //                     .map(StateBytes::de::<TdPyAny>)
+        //                     .unwrap_or_else(|| py.None().into());
+        //                 tracing::info!(
+        //                     "{index:?} building input {step_id:?} partition \
+        //                     {key:?} with resume state {state:?}"
+        //                 );
+        //                 let iter: Py<PyIterator> = self
+        //                     .0
+        //                     .call_method1(py, "build_part", (key.clone(), state.clone_ref(py)))?
+        //                     .as_ref(py)
+        //                     .iter()?
+        //                     .into();
+        //                 let part = PartIter { iter, state };
+        //                 Ok((key, part))
+        //             })
+        //             .collect::<PyResult<HashMap<StateKey, PartIter>>>()
+        //             .pyerr::<PyRuntimeError>("error building input parts")?;
+        // >>>>>>> f8941fe (Remove multiprocess dependency, error handling)
 
         if !resume_state.is_empty() {
-            tracing::warn!("Resume state exists for {step_id:?} for unknown partitions {:?}; changing partition counts? recovery state routing bug?", resume_state.keys());
+            tracing::warn!(
+                "Resume state exists for {step_id:?} \
+                for unknown partitions {:?}; changing partition \
+                counts? recovery state routing bug?",
+                resume_state.keys()
+            );
         }
 
         Ok(parts)
@@ -164,7 +216,6 @@ impl PartitionedInput {
     {
         let mut parts = self.build(py, step_id.clone(), index, count, resume_state)?;
         let bundle_size = parts.len();
-
         let mut op_builder = OperatorBuilder::new(step_id.0.clone(), scope.clone());
 
         let (mut output_wrapper, output_stream) = op_builder.new_output();

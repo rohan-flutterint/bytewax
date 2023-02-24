@@ -10,7 +10,7 @@ use crate::recovery::operators::{FlowChangeStream, Route};
 use crate::unwrap_any;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{FrontierNotificator, Map, Operator};
@@ -18,7 +18,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 /// Represents a `bytewax.outputs.Output` from Python.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct Output(Py<PyAny>);
 
 /// Do some eager type checking.
@@ -87,17 +87,18 @@ impl PartitionedOutput {
         worker_count: WorkerCount,
         mut resume_state: StepStateBytes,
     ) -> PyResult<(StatefulBundle, PartAssigner)> {
-        let keys: BTreeSet<StateKey> = self.0.call_method0(py, "list_parts")?.extract(py)?;
+        let mut keys: Vec<StateKey> = self.0.call_method0(py, "list_parts")?.extract(py)?;
+        keys.sort_unstable();
 
         let sinks = keys
             .into_iter()
-        // We are using the [`StateKey`] routing hash as the way to
-        // divvy up partitions to workers. This is kinda an abuse of
-        // behavior, but also means we don't have to find a way to
-        // propogate the correct partition:worker mappings into the
-        // restore system, which would be more difficult as we have to
-        // find a way to treat this kind of state key differently. I
-        // might regret this.
+            // We are using the [`StateKey`] routing hash as the way to
+            // divvy up partitions to workers. This is kinda an abuse of
+            // behavior, but also means we don't have to find a way to
+            // propogate the correct partition:worker mappings into the
+            // restore system, which would be more difficult as we have to
+            // find a way to treat this kind of state key differently. I
+            // might regret this.
             .filter(|key| key.is_local(worker_index, worker_count))
             .map(|key| {
                 let state = resume_state
@@ -113,7 +114,12 @@ impl PartitionedOutput {
             }).collect::<PyResult<HashMap<StateKey, StatefulSink>>>()?;
 
         if !resume_state.is_empty() {
-            tracing::warn!("Resume state exists for {step_id:?} for unknown partitions {:?}; changing partition counts? recovery state routing bug?", resume_state.keys());
+            tracing::warn!(
+                "Resume state exists for {step_id:?} \
+                for unknown partitions {:?}; changing partition \
+                counts? recovery state routing bug?",
+                resume_state.keys()
+            );
         }
 
         let assign_part = self.0.getattr(py, "assign_part")?.extract(py)?;

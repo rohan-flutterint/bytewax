@@ -89,12 +89,11 @@ macro_rules! log_func {
 }
 
 #[macro_export]
-/// This macro generates some boilerplate for classes exposed to Python.
-/// This is needed mainly for pickling and unpickling of the objects.
+/// This macro generates the __new__ method for classes exposed to Python.
 ///
 /// ```rust
 /// // Example usage:
-/// use bytewax::add_pymethods;
+/// use bytewax::py_subclass;
 /// use chrono::Duration;
 /// use pyo3::{pyclass, Python};
 ///
@@ -110,9 +109,7 @@ macro_rules! log_func {
 ///     SlidingWindow,
 ///     parent: WindowConfig,
 ///     py_args: (length,),
-///     args {
-///         length: Duration => Duration::zero()
-///     }
+///     args { length: Duration }
 /// );
 /// ```
 macro_rules! add_pymethods {(
@@ -129,8 +126,19 @@ macro_rules! add_pymethods {(
             (Self { $($arg),* }, $parent {})
         }
 
+        // pub fn copy(&self) -> $struct {
+        //     self.clone()
+        // }
+        // pub fn __copy__(&self) -> $struct {
+        //     self.clone()
+        // }
+        // pub fn __deepcopy__(&self, _memo: &pyo3::types::PyDict) -> $struct {self.clone()}
+        // pub fn __getstate__<'py>(&self, py: pyo3::Python<'py>) -> pyo3::PyResult<&'py pyo3::types::PyBytes> {
+        //     Ok(pyo3::types::PyBytes::new(py, &serde::ser::serialize(&self).unwrap()))
+        // }
         /// Return a representation of this class as a PyDict.
         fn __getstate__(&self) -> std::collections::HashMap<&str, pyo3::Py<pyo3::PyAny>> {
+
             pyo3::Python::with_gil(|py| {
                 std::collections::HashMap::from([
                     ("type", pyo3::IntoPy::into_py(stringify!($struct), py)),

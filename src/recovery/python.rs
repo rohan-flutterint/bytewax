@@ -123,9 +123,7 @@ add_pymethods!(
     SqliteRecoveryConfig,
     parent: RecoveryConfig,
     py_args: (db_dir),
-    args {
-        db_dir: PathBuf => String::new().into()
-    }
+    args { db_dir: PathBuf => String::new().into() }
 );
 
 impl SqliteRecoveryConfig {

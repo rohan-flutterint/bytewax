@@ -675,7 +675,7 @@ impl Dataflow {
 /// See
 /// <https://docs.rs/timely/latest/timely/dataflow/operators/index.html>
 /// for Timely's operators. We try to keep the same semantics here.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum Step {
     Input {
         step_id: StepId,

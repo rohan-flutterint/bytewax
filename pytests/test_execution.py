@@ -1,49 +1,54 @@
 import os
 import signal
+import tempfile
 from sys import exit
 
-from pytest import mark, raises, skip
+from pytest import mark, raises
 
 from bytewax.dataflow import Dataflow
 from bytewax.testing import TestingInput, TestingOutput
+from bytewax.run import run
 
 
-def test_run(entry_point, out):
-    flow = Dataflow()
-    inp = range(3)
-    flow.input("inp", TestingInput(inp))
-    flow.map(lambda x: x + 1)
-    flow.output("out", TestingOutput(out))
+def test_run():
+    # f = open("/tmp/output", "w+b")
+    f = tempfile.NamedTemporaryFile()
+    run(
+        path="pytests/test_flows/__init__.py",
+        dataflow_name="flow1",
+        dataflow_args=[f.name,],
+        processes=1,
+        workers_per_process=1,
+        snapshot_every=0,
+        recovery_engine=None,
+        kafka_topic=None,
+        kafka_brokers=None,
+        sqlite_directory=None,
+    )
+    f.seek(0)
+    out = [int(i) for i in f.read().split()]
+    f.close()
+    assert sorted(out) == sorted([0, 1, 2])
 
-    entry_point(flow)
 
-    assert sorted(out) == sorted([1, 2, 3])
-
-
-def test_reraises_exception(entry_point, out, entry_point_name):
-    if entry_point_name.startswith("spawn_cluster"):
-        skip(
-            "Timely is currently double panicking in cluster mode and that causes"
-            " pool.join() to hang; it can be ctrl-c'd though"
-        )
-
-    flow = Dataflow()
-    inp = range(3)
-    flow.input("inp", TestingInput(inp))
-
-    def boom(item):
-        if item == 0:
-            raise RuntimeError("BOOM")
-        else:
-            return item
-
-    flow.map(boom)
-    flow.output("out", TestingOutput(out))
+def test_reraises_exception():
+    f = open("/tmp/output", "w+b")
 
     with raises(RuntimeError):
-        entry_point(flow)
+        run(
+            path="pytests/test_flows/__init__.py",
+            dataflow_name="flow_raises",
+            # Using more than one process makes the dataflow panic
+            # while panicking
+            processes=None,
+            workers_per_process=None,
+            out=f
+        )
 
-    assert len(out) < 3
+    f.seek(0)
+    out = [int(i) for i in f.read().split()]
+    f.close()
+    assert len(out) == 3
 
 
 @mark.skipif(
@@ -86,29 +91,18 @@ def test_can_be_ctrl_c(mp_ctx, entry_point):
         assert len(out) < 1000
 
 
-def test_requires_input(entry_point):
-    flow = Dataflow()
-    out = []
-    flow.output("out", TestingOutput(out))
-
-    with raises(ValueError):
-        entry_point(flow)
-
-
-def test_requires_output(entry_point):
-    flow = Dataflow()
-    inp = range(3)
-    flow.input("inp", TestingInput(inp))
-
-    with raises(ValueError):
-        entry_point(flow)
-
-
 @mark.skip(
     "We should have a way to access worker_index in whatever replaces spawn_cluster"
 )
 def test_input_parts_hashed_to_workers(mp_ctx):
     pass
+
+
+def test_parts_hashed_to_workers(mp_ctx):
+    with mp_ctx.Manager() as man:
+        proc_count = 3
+        worker_count_per_proc = 2
+        worker_count = proc_count * worker_count_per_proc
 
 
 @mark.skip(
