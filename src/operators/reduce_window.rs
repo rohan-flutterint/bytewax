@@ -4,8 +4,7 @@ use tracing::field::debug;
 
 use crate::{
     pyo3_extensions::{TdPyAny, TdPyCallable},
-    unwrap_any,
-    window::*,
+    window::*, errors::UnwrapAny,
 };
 
 /// Implements the reduce window operator.
@@ -46,7 +45,7 @@ impl WindowLogic<TdPyAny, TdPyAny, Option<TdPyAny>> for ReduceWindowLogic {
                         None => value,
                         Some(acc) => {
                             tracing::trace!("Calling python reducer");
-                            unwrap_any!(self.reducer.call1(py, (acc, value))).into()
+                            self.reducer.call1(py, (acc, value)).unwrap_any().into()
                         }
                     };
                     tracing::Span::current().record("updated_acc", debug(&updated_acc));

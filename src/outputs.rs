@@ -3,11 +3,11 @@
 //! For a user-centric version of output, read the `bytewax.output`
 //! Python module docstring. Read that first.
 
+use crate::errors::UnwrapAny;
 use crate::execution::{WorkerCount, WorkerIndex};
 use crate::pyo3_extensions::{extract_state_pair, wrap_state_pair, TdPyAny, TdPyCallable};
 use crate::recovery::model::*;
 use crate::recovery::operators::{FlowChangeStream, Route};
-use crate::unwrap_any;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -259,9 +259,8 @@ where
         let mut input_handle = op_builder.new_input_connection(
             &kv_stream,
             Exchange::new(move |(key, _value): &(StateKey, TdPyAny)| {
-                let part_key = unwrap_any!(Python::with_gil(
-                    |py| ex_assigner.assign_part(py, key.clone())
-                ));
+                let part_key =
+                    Python::with_gil(|py| ex_assigner.assign_part(py, key.clone())).unwrap_any();
                 part_key.route()
             }),
             // This is saying this input results in items on any
@@ -296,7 +295,7 @@ where
                     });
 
                     output_ncater.for_each(&[&input_frontiers[0]], |cap, _| {
-                        unwrap_any!(Python::with_gil(|py| -> PyResult<()> {
+                        Python::with_gil(|py| -> PyResult<()> {
                             let epoch = cap.time();
 
                             if let Some(items) = incoming_buffer.remove(epoch) {
@@ -312,11 +311,13 @@ where
                                 }
                             }
                             Ok(())
-                        }))
+                        })
+                        .unwrap_any()
                     });
 
                     change_ncater.for_each(&[&input_frontiers[0]], |cap, _| {
-                        let kchanges = unwrap_any!(Python::with_gil(|py| bundle.snapshot(py)))
+                        let kchanges = Python::with_gil(|py| bundle.snapshot(py))
+                            .unwrap_any()
                             .into_iter()
                             .map(|(key, snapshot)| {
                                 KChange(FlowKey(step_id.clone(), key), Change::Upsert(snapshot))
@@ -328,7 +329,7 @@ where
                     });
 
                     if input_frontiers.iter().all(|f| f.is_empty()) {
-                        unwrap_any!(Python::with_gil(|py| bundle.close(py)));
+                        Python::with_gil(|py| bundle.close(py)).unwrap_any();
                         None
                     } else {
                         Some(bundle)
@@ -460,7 +461,7 @@ where
                     });
 
                     ncater.for_each(&[input.frontier()], |cap, _| {
-                        unwrap_any!(Python::with_gil(|py| -> PyResult<()> {
+                        Python::with_gil(|py| -> PyResult<()> {
                             let epoch = cap.time();
 
                             let mut output_session = output.session(&cap);
@@ -471,11 +472,12 @@ where
                                 }
                             }
                             Ok(())
-                        }))
+                        })
+                        .unwrap_any()
                     });
 
                     if input.frontier().is_empty() {
-                        unwrap_any!(Python::with_gil(|py| sink.close(py)));
+                        Python::with_gil(|py| sink.close(py)).unwrap_any();
                         None
                     } else {
                         Some(sink)

@@ -9,9 +9,9 @@
 //!   [`crate::recovery::StatefulLogic`] and
 //!   [`crate::window::WindowLogic`].
 
+use crate::errors::UnwrapAny;
 use crate::pyo3_extensions::{TdPyAny, TdPyCallable, TdPyIterator};
 use crate::try_unwrap;
-use crate::unwrap_any;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 
@@ -24,7 +24,7 @@ pub(crate) mod stateful_unary;
 
 #[tracing::instrument(level = "trace")]
 pub(crate) fn map(mapper: &TdPyCallable, item: TdPyAny) -> TdPyAny {
-    Python::with_gil(|py| unwrap_any!(mapper.call1(py, (item,))).into())
+    Python::with_gil(|py| mapper.call1(py, (item,)).unwrap_any().into())
 }
 
 #[tracing::instrument(level = "trace")]
@@ -49,10 +49,10 @@ pub(crate) fn filter(predicate: &TdPyCallable, item: &TdPyAny) -> bool {
 
 #[tracing::instrument(level = "trace")]
 pub(crate) fn inspect(inspector: &TdPyCallable, item: &TdPyAny) {
-    Python::with_gil(|py| unwrap_any!(inspector.call1(py, (item,))));
+    Python::with_gil(|py| inspector.call1(py, (item,))).unwrap_any();
 }
 
 #[tracing::instrument(level = "trace")]
 pub(crate) fn inspect_epoch(inspector: &TdPyCallable, epoch: &u64, item: &TdPyAny) {
-    Python::with_gil(|py| unwrap_any!(inspector.call1(py, (*epoch, item))));
+    Python::with_gil(|py| inspector.call1(py, (*epoch, item))).unwrap_any();
 }

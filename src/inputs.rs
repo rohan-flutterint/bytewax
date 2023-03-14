@@ -3,12 +3,11 @@
 //! For a user-centric version of input, read the `bytewax.inputs`
 //! Python module docstring. Read that first.
 
-use crate::errors::{raise, StackRaiser, TdResult};
+use crate::errors::{raise, UnwrapAny, StackRaiser, TdResult};
 use crate::execution::{WorkerCount, WorkerIndex};
 use crate::pyo3_extensions::TdPyAny;
 use crate::recovery::model::*;
 use crate::recovery::operators::{FlowChangeStream, Route};
-use crate::unwrap_any;
 use pyo3::exceptions::{PyRuntimeError, PyStopIteration, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use std::cell::Cell;
@@ -208,7 +207,7 @@ impl PartitionedInput {
                         let mut output_handle = output_wrapper.activate();
                         let mut output_session = output_handle.session(&output_cap);
                         for (key, part) in parts.iter() {
-                            match unwrap_any!(Python::with_gil(|py| part.next(py))) {
+                            match Python::with_gil(|py| part.next(py)).unwrap_any() {
                                 Poll::Pending => {}
                                 Poll::Ready(None) => {
                                     tracing::trace!(
@@ -243,7 +242,7 @@ impl PartitionedInput {
                                 let part = parts
                                     .get(&state_key)
                                     .expect("Unknown partition {state_key:?} to snapshot");
-                                let snap = unwrap_any!(Python::with_gil(|py| part.snapshot(py)));
+                                let snap = Python::with_gil(|py| part.snapshot(py)).unwrap_any();
                                 (state_key, snap)
                             })
                             .map(|(state_key, snap)| (FlowKey(step_id_op.clone(), state_key), snap))
@@ -258,7 +257,7 @@ impl PartitionedInput {
                         let part = parts
                             .remove(&key)
                             .expect("Unknown partition {key:?} marked as EOF");
-                        unwrap_any!(Python::with_gil(|py| part.close(py)));
+                        Python::with_gil(|py| part.close(py)).unwrap_any();
                     }
 
                     if parts.is_empty() {
@@ -428,9 +427,9 @@ impl DynamicInput {
                     let mut eof = false;
 
                     if !probe.less_than(epoch) {
-                        match unwrap_any!(Python::with_gil(|py| source
-                            .next(py)
-                            .raises::<PyValueError>("error getting input")))
+                        match Python::with_gil(|py| source.next(py))
+                            .raises::<PyValueError>("error getting input")
+                            .unwrap_any()
                         {
                             Poll::Pending => {}
                             Poll::Ready(None) => {
@@ -449,7 +448,7 @@ impl DynamicInput {
 
                     if eof {
                         tracing::trace!("Input {step_id:?} reached EOF");
-                        unwrap_any!(Python::with_gil(|py| source.close(py)));
+                        Python::with_gil(|py| source.close(py)).unwrap_any();
                         None
                     } else if advance {
                         let next_epoch = epoch + 1;

@@ -24,18 +24,19 @@ from bytewax.window import SystemClockConfig, SessionWindow
 
 
 class WikiSource(StatelessSource):
-    def __init__(self, client, events, should_fail):
-        self.client = client
-        self.events = events
-        self.should_fail = should_fail
+    def __init__(self, client, events, worker_index):
+        self.worker_index = worker_index
+        if worker_index == 0:
+            self.client = client
+            self.events = events
 
     def next(self):
-        if self.should_fail:
-            raise Exception("BOOM")
-        next(self.events)
+        if self.worker_index == 0:
+            return next(self.events).data
 
     def close(self):
-        self.client.close()
+        if self.worker_index == 0:
+            self.client.close()
 
 
 class WikiStreamInput(DynamicInput):
@@ -51,7 +52,7 @@ class WikiStreamInput(DynamicInput):
         self.events = self.client.events()
 
     def build(self, worker_index, worker_count):
-        return WikiSource(self.client, self.events, worker_index == 0)
+        return WikiSource(self.client, self.events, worker_index)
 
 
 def initial_count(data_dict):

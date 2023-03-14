@@ -6,8 +6,9 @@ use tracing::field::debug;
 
 use super::stateful_unary::*;
 use crate::{
+    errors::UnwrapAny,
     pyo3_extensions::{TdPyAny, TdPyCallable},
-    try_unwrap, unwrap_any,
+    try_unwrap,
 };
 
 /// Implements the reduce operator.
@@ -54,10 +55,11 @@ impl StatefulLogic<TdPyAny, TdPyAny, Option<TdPyAny>> for ReduceLogic {
                     // If there's no previous state for this key, use
                     // the current value.
                     None => value,
-                    Some(acc) => unwrap_any!(self
+                    Some(acc) => self
                         .reducer
-                        .call1(py, (acc.clone_ref(py), value.clone_ref(py))))
-                    .into(),
+                        .call1(py, (acc.clone_ref(py), value.clone_ref(py)))
+                        .unwrap_any()
+                        .into(),
                 };
                 tracing::Span::current().record("updated_acc", debug(&updated_acc));
 

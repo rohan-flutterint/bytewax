@@ -3,8 +3,8 @@ use pyo3::prelude::*;
 use tracing::field::debug;
 
 use crate::{
+    errors::UnwrapAny,
     pyo3_extensions::{TdPyAny, TdPyCallable},
-    unwrap_any,
     window::*,
 };
 
@@ -47,12 +47,13 @@ impl WindowLogic<TdPyAny, TdPyAny, Option<TdPyAny>> for FoldWindowLogic {
                 let acc: TdPyAny = self
                     .acc
                     .take()
-                    .unwrap_or_else(|| unwrap_any!(self.builder.call1(py, ())).into());
+                    .unwrap_or_else(|| self.builder.call1(py, ()).unwrap_any().into());
                 // Call the folder with the initialized accumulator.
-                let updated_acc = unwrap_any!(self
+                let updated_acc = self
                     .folder
-                    .call1(py, (acc.clone_ref(py), value.clone_ref(py))))
-                .into();
+                    .call1(py, (acc.clone_ref(py), value.clone_ref(py)))
+                    .unwrap_any()
+                    .into();
                 tracing::Span::current().record("updated_acc", debug(&updated_acc));
                 self.acc = Some(updated_acc);
                 None

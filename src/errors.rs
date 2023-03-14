@@ -9,6 +9,21 @@ use std::{error::Error, fmt::Display, panic::Location, thread};
 
 use pyo3::{PyErr, PyResult, PyTypeInfo, Python};
 
+pub(crate) trait UnwrapAny<T> {
+    /// Unwraps using [`std::panic::panic_any`], needed to panic with any structure in Rust 2021.
+    /// See [https://github.com/rust-lang/rust/issues/78500]
+    fn unwrap_any(self) -> T;
+}
+
+impl<T, E: 'static + Send> UnwrapAny<T> for Result<T, E> {
+    fn unwrap_any(self) -> T {
+        match self {
+            Ok(t) => t,
+            Err(_) => self.unwrap_or_else(|err| std::panic::panic_any(err)),
+        }
+    }
+}
+
 // Custom error type that wraps PyErr.
 #[derive(Debug)]
 pub(crate) struct TdError(PyErr);

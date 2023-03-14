@@ -6,8 +6,9 @@ use tracing::field::debug;
 
 use super::stateful_unary::*;
 use crate::{
+    errors::UnwrapAny,
     pyo3_extensions::{TdPyAny, TdPyCallable},
-    try_unwrap, unwrap_any,
+    try_unwrap,
 };
 
 /// Implements the stateful map operator.
@@ -32,7 +33,7 @@ impl StatefulMapLogic {
                 .map(StateBytes::de::<Option<TdPyAny>>)
                 .unwrap_or_else(|| {
                     Python::with_gil(|py| {
-                        let initial_state: TdPyAny = unwrap_any!(builder.call1(py, ())).into();
+                        let initial_state: TdPyAny = builder.call1(py, ()).unwrap_any().into();
                         tracing::debug!(
                             builder = ?builder,
                             initial_state = ?initial_state,
@@ -63,7 +64,7 @@ impl StatefulLogic<TdPyAny, TdPyAny, Option<TdPyAny>> for StatefulMapLogic {
             Python::with_gil(|py| {
                 let state = self.state.get_or_insert_with(|| {
                     tracing::trace!("Calling python builder");
-                    unwrap_any!(self.builder.call1(py, ())).into()
+                    self.builder.call1(py, ()).unwrap_any().into()
                 });
                 let (updated_state, updated_value): (Option<TdPyAny>, TdPyAny) = try_unwrap!({
                     let updated_state_value_pytuple: TdPyAny = self
