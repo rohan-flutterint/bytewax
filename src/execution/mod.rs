@@ -36,7 +36,6 @@ use crate::window::{clock::ClockBuilder, StatefulWindowUnary};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::any::Any;
 use std::fmt::Debug;
 use std::io::Write;
 use std::rc::Rc;
@@ -721,22 +720,23 @@ pub(crate) fn run_main(
             // We can differentiate the 2 situations by trying to downcast the panic
             // to a PyErr. If that doesn't work, we assume the worker crashed
             // on the Rust side of the moon.
-            handle_panic(py, panic_err)
+            let err = if let Some(err) = panic_err.downcast_ref::<TdError>() {
+                // So if it already was a TdError, we just return a clone of it.
+                err.clone_ref(py)
+            } else if let Some(err) = panic_err.downcast_ref::<String>() {
+                // If it can be downcasted to a string, we turn it into a RuntimeError
+                // with the string as the message (this is the case with timely internal panics).
+                tderr::<PyRuntimeError>(err)
+            } else {
+                // If it's not even a string, we give up,
+                // something panicked with a custom payload.
+                tderr::<PyRuntimeError>("unknown error")
+            };
+            TdResult::Err(err)
                 .raises::<PyRuntimeError>("Worker crashed")
                 .as_pyresult::<PyRuntimeError>()
         }
     }
-}
-
-fn handle_panic<T>(py: Python, panic_err: Box<dyn Any + Send>) -> TdResult<T> {
-    let err = if let Some(err) = panic_err.downcast_ref::<TdError>() {
-        err.clone_ref(py)
-    } else if let Some(err) = panic_err.downcast_ref::<String>() {
-        tderr::<PyRuntimeError>(err)
-    } else {
-        tderr::<PyRuntimeError>("unknown error")
-    };
-    TdResult::Err(err)
 }
 
 /// Execute a dataflow in the current process as part of a cluster.
