@@ -3,7 +3,7 @@
 //! For a user-centric version of input, read the `bytewax.inputs`
 //! Python module docstring. Read that first.
 
-use crate::errors::{raise, tderr, StackRaiser, TdResult};
+use crate::errors::{raise, StackRaiser, TdResult};
 use crate::execution::{WorkerCount, WorkerIndex};
 use crate::pyo3_extensions::TdPyAny;
 use crate::recovery::model::*;

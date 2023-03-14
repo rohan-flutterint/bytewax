@@ -15,10 +15,7 @@
 //! components added to the Timely dataflow.
 
 use crate::dataflow::{Dataflow, Step};
-use crate::errors::{
-    err_chain_thread, err_msg_thread, plain_tderr, pyerr_chain, pyerr_chain_thread,
-    pyerr_msg_thread, tderr, StackRaiser, TdError, TdResult,
-};
+use crate::errors::{err_msg_thread, pyerr_msg_thread, tderr, StackRaiser, TdError, TdResult};
 use crate::inputs::*;
 use crate::operators::collect_window::CollectWindowLogic;
 use crate::operators::fold_window::FoldWindowLogic;
@@ -39,9 +36,9 @@ use crate::window::{clock::ClockBuilder, StatefulWindowUnary};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::any::Any;
 use std::fmt::Debug;
 use std::io::Write;
-use std::panic::{panic_any, AssertUnwindSafe};
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -109,7 +106,6 @@ fn build_production_dataflow<A, PW, SW>(
     store_summary: StoreSummary,
     mut progress_writer: PW,
     state_writer: SW,
-    interrupt_flag: &'static AtomicBool,
 ) -> TdResult<ProbeHandle<u64>>
 where
     A: Allocate,
@@ -446,24 +442,15 @@ fn run_until_done<A: Allocate, T: Timestamp>(
     probe: ProbeHandle<T>,
 ) -> TdResult<()> {
     let mut span = PeriodicSpan::new(Duration::from_secs(10));
-    while !FLAG.load(Ordering::Relaxed) && !probe.done() {
-        println!("Step {} {}", worker.index(), FLAG.load(Ordering::Relaxed));
-        let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            worker.step();
-        }));
-        if let Err(err) = res {
-            let err = err.downcast::<TdError>().unwrap();
-            eprintln!("CIAO {err}");
-            interrupt_flag.store(true, Ordering::Relaxed);
-            return Err(*err);
-        }
+    while !interrupt_flag.load(Ordering::Relaxed) && !probe.done() {
+        worker.step();
         span.update();
-        Python::with_gil(|py| {
-            Python::check_signals(py).map_err(|err| {
+        Python::with_gil(|py| Python::check_signals(py))
+            .map_err(|err| {
                 interrupt_flag.store(true, Ordering::Relaxed);
-                pyerr_chain_thread::<PyRuntimeError>(py, "Error in worker", &err.into())
+                err
             })
-        })?;
+            .raises::<PyRuntimeError>("Error in worker")?;
     }
     Ok(())
 }
@@ -516,7 +503,7 @@ where
 #[allow(clippy::too_many_arguments)]
 fn build_and_run_production_dataflow<A, PW, SW>(
     worker: &mut Worker<A>,
-    interrupt_flag: &'static AtomicBool,
+    interrupt_flag: &AtomicBool,
     flow: Py<Dataflow>,
     epoch_interval: EpochInterval,
     resume_from: ResumeFrom,
@@ -557,7 +544,6 @@ where
             store_summary,
             progress_writer,
             state_writer,
-            interrupt_flag,
         )
         .raises::<PyRuntimeError>("error building dataflow")
     })?;
@@ -582,7 +568,7 @@ fn shutdown_worker<A: Allocate>(worker: &mut Worker<A>) {
 /// What a worker thread should do during its lifetime.
 fn worker_main<A: Allocate>(
     worker: &mut Worker<A>,
-    interrupt_flag: &'static AtomicBool,
+    interrupt_flag: &AtomicBool,
     flow: Py<Dataflow>,
     epoch_interval: Option<EpochInterval>,
     recovery_config: Option<Py<RecoveryConfig>>,
@@ -697,9 +683,6 @@ fn worker_main<A: Allocate>(
 ///   recovery_config: State recovery config. See
 ///       `bytewax.recovery`. If `None`, state will not be
 ///       persisted.
-
-static FLAG: AtomicBool = AtomicBool::new(false);
-
 #[pyfunction(flow, "*", epoch_interval = "None", recovery_config = "None")]
 #[pyo3(text_signature = "(flow, *, epoch_interval, recovery_config)")]
 pub(crate) fn run_main(
@@ -716,7 +699,14 @@ pub(crate) fn run_main(
             // the builder directly. Probably also as part of the
             // panic recast issue below.
             timely::execute::execute_directly::<TdResult<()>, _>(move |worker| {
-                worker_main(worker, &FLAG, flow, epoch_interval, recovery_config)
+                let interrupt_flag = AtomicBool::new(false);
+                worker_main(
+                    worker,
+                    &interrupt_flag,
+                    flow,
+                    epoch_interval,
+                    recovery_config,
+                )
             })
         })
     });
@@ -731,18 +721,22 @@ pub(crate) fn run_main(
             // We can differentiate the 2 situations by trying to downcast the panic
             // to a PyErr. If that doesn't work, we assume the worker crashed
             // on the Rust side of the moon.
-            let err = if let Some(err) = panic_err.downcast_ref::<TdError>() {
-                err.clone_ref(py)
-            } else if let Some(err) = panic_err.downcast_ref::<String>() {
-                tderr::<PyRuntimeError>(err)
-            } else {
-                tderr::<PyRuntimeError>("unknown error")
-            };
-            TdResult::Err(err)
+            handle_panic(py, panic_err)
                 .raises::<PyRuntimeError>("Worker crashed")
                 .as_pyresult::<PyRuntimeError>()
         }
     }
+}
+
+fn handle_panic<T>(py: Python, panic_err: Box<dyn Any + Send>) -> TdResult<T> {
+    let err = if let Some(err) = panic_err.downcast_ref::<TdError>() {
+        err.clone_ref(py)
+    } else if let Some(err) = panic_err.downcast_ref::<String>() {
+        tderr::<PyRuntimeError>(err)
+    } else {
+        tderr::<PyRuntimeError>("unknown error")
+    };
+    TdResult::Err(err)
 }
 
 /// Execute a dataflow in the current process as part of a cluster.
@@ -829,16 +823,15 @@ pub(crate) fn cluster_main(
         .raises::<PyRuntimeError>("Error building cluster")
         .as_pyresult::<PyRuntimeError>()?;
 
-        // let should_shutdown = Arc::new(AtomicBool::new(false));
-        // let should_shutdown_w = should_shutdown.clone();
-        // let should_shutdown_p = should_shutdown.clone();
-        // let should_shutdown_3 = should_shutdown.clone();
+        let should_shutdown = Arc::new(AtomicBool::new(false));
+        let should_shutdown_w = should_shutdown.clone();
+        let should_shutdown_p = should_shutdown.clone();
 
         // Set a custom panic_hook.
         // Here we try to downcast the payload to various
         // types to offer better info, and default to the original info.
         std::panic::set_hook(Box::new(move |info| {
-            FLAG.store(true, Ordering::Relaxed);
+            should_shutdown_p.store(true, Ordering::Relaxed);
             // Acquire stdout lock and write the string as bytes,
             // so we avoid interleaving outputs from different threads.
             let mut stderr = std::io::stderr().lock();
@@ -864,7 +857,7 @@ pub(crate) fn cluster_main(
             move |worker| {
                 worker_main(
                     worker,
-                    &FLAG,
+                    &should_shutdown_w,
                     flow.clone(),
                     epoch_interval.clone(),
                     recovery_config.clone(),
@@ -873,9 +866,6 @@ pub(crate) fn cluster_main(
         )
         .raises::<PyRuntimeError>("Error while running the cluster")
         .as_pyresult::<PyRuntimeError>()?;
-        // .map_err(|err| {
-        //     err_chain_thread::<PyRuntimeError>("Error while running cluster", &err).as_pyerr()
-        // })?;
 
         // Recreating what Python does in Thread.join() to "block"
         // but also check interrupt handlers.
@@ -887,7 +877,7 @@ pub(crate) fn cluster_main(
         {
             thread::sleep(Duration::from_millis(1));
             Python::with_gil(|py| Python::check_signals(py)).map_err(|err| {
-                FLAG.store(true, Ordering::Relaxed);
+                should_shutdown.store(true, Ordering::Relaxed);
                 err
             })?;
         }

@@ -153,16 +153,3 @@ pub(crate) fn err_msg_thread(err: &str) -> String {
 fn err_chain<T: PyTypeInfo>(msg: &str, err: &str) -> TdError {
     TdError(PyErr::new::<T, _>(format!("{msg}\nCaused by => {err}")))
 }
-
-/// Chain an error msg with a PyErr, adding track_caller info, traceback and thread name.
-#[track_caller]
-pub(crate) fn pyerr_chain_thread<T: PyTypeInfo>(py: Python, msg: &str, err: &PyErr) -> TdError {
-    let caller = std::panic::Location::caller();
-    let msg: String = format!("({caller}) {msg}");
-    let err_msg: String = prepend_tname(
-        get_traceback(py, err)
-            .map(|tb| format!("{err}\n{tb}"))
-            .unwrap_or_else(|| format!("{err}")),
-    );
-    err_chain::<T>(&msg, &err_msg)
-}
