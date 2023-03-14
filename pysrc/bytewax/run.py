@@ -7,12 +7,7 @@ import pathlib
 from datetime import timedelta
 from importlib.util import spec_from_file_location, module_from_spec
 
-from bytewax.execution import (
-    run_main,
-    cluster_main,
-    TestingEpochConfig,
-    PeriodicEpochConfig,
-)
+from bytewax.execution import run_main, cluster_main
 from bytewax.dataflow import Dataflow
 from bytewax.recovery import SqliteRecoveryConfig, KafkaRecoveryConfig
 
@@ -113,10 +108,7 @@ def run(
     proc_id = os.getenv("__BYTEWAX_PROC_ID", None)
     flow = _get_flow(path, dataflow_name, dataflow_args)
 
-    if snapshot_every == 0:
-        epoch_config = TestingEpochConfig()
-    else:
-        epoch_config = PeriodicEpochConfig(timedelta(seconds=snapshot_every))
+    epoch_interval = timedelta(seconds=snapshot_every)
     recovery_config = None
     if recovery_engine is not None:
         if recovery_engine == "kafka":
@@ -127,7 +119,7 @@ def run(
             recovery_config = SqliteRecoveryConfig(sqlite_directory or "./")
 
     if proc_id is None and processes is None and workers_per_process is None:
-        run_main(flow, epoch_config=epoch_config, recovery_config=recovery_config)
+        run_main(flow, epoch_interval=epoch_interval, recovery_config=recovery_config)
     else:
         addresses = [f"localhost:{proc_id + 2101}" for proc_id in range(processes)]
 
@@ -136,7 +128,7 @@ def run(
                 flow,
                 addresses,
                 int(proc_id),
-                epoch_config=epoch_config,
+                epoch_interval=epoch_interval,
                 recovery_config=recovery_config,
                 worker_count_per_proc=workers_per_process,
             )

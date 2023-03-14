@@ -8,7 +8,7 @@ import urllib3
 
 from bytewax.dataflow import Dataflow
 from bytewax.execution import run_main
-from bytewax.inputs import PartitionedInput
+from bytewax.inputs import DynamicInput, StatelessSource
 from bytewax.connectors.stdio import StdOutput
 from bytewax.window import SystemClockConfig, SessionWindow
 
@@ -23,38 +23,32 @@ from bytewax.window import SystemClockConfig, SessionWindow
 # )
 
 
-class WikiStreamInput(PartitionedInput):
-    def list_parts(self):
-        # Wikimedia's SSE stream has no way to request disjoint data,
-        # so we have only one partition.
-        return ["single-stream", "not", "boh"]
+class WikiSource:
+    def __init__(self, client, events):
+        self.client = client
+        self.events = events
 
-    def build_part(self, for_key, resume_state):
-        # Since there is no way to rewind to SSE data we missed while
-        # resuming a dataflow, we're going to ignore `resume_state`
-        # and drop missed data. That's fine as long as we know to
-        # interpret the results with that in mind.
-        # assert for_key == "single-stream"
-        assert resume_state is None
+    def next(self):
+        next(self.events)
 
-        pool = urllib3.PoolManager()
-        resp = pool.request(
+    def close(self):
+        self.client.close()
+
+
+class WikiStreamInput(DynamicInput):
+    def __init__(self):
+        self.pool = urllib3.PoolManager()
+        self.resp = self.pool.request(
             "GET",
             "https://stream.wikimedia.org/v2/stream/recentchange/",
             preload_content=False,
             headers={"Accept": "text/event-stream"},
         )
-        client = sseclient.SSEClient(resp)
-        events = client.events()
+        self.client = sseclient.SSEClient(self.resp)
+        self.events = self.client.events()
 
-        while True:
-            try:
-                event = next(events)
-                if for_key == "single-stream":
-                    raise Exception("BOOM")
-                yield None, event.data
-            except StopIteration:
-                yield None
+    def build(self, worker_index, worker_count):
+        return WikiSource(self.client, self.events)
 
 
 def initial_count(data_dict):

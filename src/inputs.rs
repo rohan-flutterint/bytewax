@@ -3,21 +3,13 @@
 //! For a user-centric version of input, read the `bytewax.inputs`
 //! Python module docstring. Read that first.
 
+use crate::errors::{StackRaiser, TdResult};
 use crate::execution::{WorkerCount, WorkerIndex};
 use crate::pyo3_extensions::TdPyAny;
 use crate::recovery::model::*;
 use crate::recovery::operators::{FlowChangeStream, Route};
 use crate::unwrap_any;
-use crate::{
-    errors::{pyerr_chain, ByteErr, ByteResult},
-    execution::{WorkerCount, WorkerIndex},
-    pyo3_extensions::TdPyAny,
-    recovery::{
-        model::{StateBytes, StateKey, StepId, StepStateBytes},
-        operators::Route,
-    },
-};
-use pyo3::exceptions::{PyStopIteration, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyStopIteration, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -49,7 +41,7 @@ impl Default for EpochInterval {
 }
 
 /// Represents a `bytewax.inputs.Input` from Python.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct Input(Py<PyAny>);
 
 /// Do some eager type checking.
@@ -116,27 +108,13 @@ impl PartitionedInput {
         index: WorkerIndex,
         worker_count: WorkerCount,
         mut resume_state: StepStateBytes,
-    ) -> ByteResult<HashMap<StateKey, StatefulSource>> {
+    ) -> TdResult<HashMap<StateKey, StatefulSource>> {
         let keys: BTreeSet<StateKey> = self
             .0
             .call_method0(py, "list_parts")
-            .pyerr::<PyRuntimeError>("error calling 'list_parts'")?
+            .stack::<PyRuntimeError>("error calling 'list_parts'")?
             .extract(py)
-            .pyerr::<PyValueError>("'list_parts' should return a set of strings (not a list)")?;
-        // let mut keys: Vec<StateKey> = self
-        //     .0
-        //     .call_method0(py, "list_parts")
-        //     .pyerr::<PyRuntimeError>("error calling 'list_parts'")?
-        //     .extract(py)
-        //     .pyerr::<PyValueError>("'list_parts' should return a list of string")?;
-        // .map_err(|err| {
-        //     pyerr_chain::<PyValueError>(
-        //         py,
-        //         "list_parts should return a list of strings",
-        //         &err,
-        //     )
-        // })?;
-        // keys.sort_unstable();
+            .stack::<PyValueError>("'list_parts' should return a set of strings (not a list)")?;
 
         let parts = keys
             .into_iter()
@@ -158,26 +136,9 @@ impl PartitionedInput {
                     Ok(None) => None,
                     Ok(Some(part)) => Some(Ok((key, part))),
                 }
-            }).collect::<PyResult<HashMap<StateKey, StatefulSource>>>()?;
-        // =======
-        //                     .map(StateBytes::de::<TdPyAny>)
-        //                     .unwrap_or_else(|| py.None().into());
-        //                 tracing::info!(
-        //                     "{index:?} building input {step_id:?} partition \
-        //                     {key:?} with resume state {state:?}"
-        //                 );
-        //                 let iter: Py<PyIterator> = self
-        //                     .0
-        //                     .call_method1(py, "build_part", (key.clone(), state.clone_ref(py)))?
-        //                     .as_ref(py)
-        //                     .iter()?
-        //                     .into();
-        //                 let part = PartIter { iter, state };
-        //                 Ok((key, part))
-        //             })
-        //             .collect::<PyResult<HashMap<StateKey, PartIter>>>()
-        //             .pyerr::<PyRuntimeError>("error building input parts")?;
-        // >>>>>>> f8941fe (Remove multiprocess dependency, error handling)
+            })
+            .collect::<PyResult<HashMap<StateKey, StatefulSource>>>()
+            .stack::<PyRuntimeError>("error building input parts")?;
 
         if !resume_state.is_empty() {
             tracing::warn!(
@@ -210,11 +171,13 @@ impl PartitionedInput {
         probe: &ProbeHandle<u64>,
         start_at: ResumeEpoch,
         resume_state: StepStateBytes,
-    ) -> PyResult<(Stream<S, TdPyAny>, FlowChangeStream<S>)>
+    ) -> TdResult<(Stream<S, TdPyAny>, FlowChangeStream<S>)>
     where
         S: Scope<Timestamp = u64>,
     {
-        let mut parts = self.build(py, step_id.clone(), index, count, resume_state)?;
+        let mut parts = self
+            .build(py, step_id.clone(), index, count, resume_state)
+            .stack::<PyRuntimeError>("error building parts")?;
         let bundle_size = parts.len();
         let mut op_builder = OperatorBuilder::new(step_id.0.clone(), scope.clone());
 
@@ -359,7 +322,7 @@ impl<'source> FromPyObject<'source> for StatefulSource {
             .extract()?;
         if !ob.is_instance(abc)? {
             Err(PyTypeError::new_err(
-                "stateful source derive from `bytewax.inputs.StatefulSource`",
+                "stateful source is not a subclass of `bytewax.inputs.StatefulSource`",
             ))
         } else {
             Ok(Self(ob.into()))
@@ -416,10 +379,12 @@ impl DynamicInput {
         py: Python,
         index: WorkerIndex,
         count: WorkerCount,
-    ) -> PyResult<StatelessSource> {
+    ) -> TdResult<StatelessSource> {
         self.0
-            .call_method1(py, "build", (index, count))?
+            .call_method1(py, "build", (index, count))
+            .stack::<PyRuntimeError>("error while calling 'DynamicInput.build'")?
             .extract(py)
+            .stack::<PyValueError>("build method did not return a 'StatelessSource'")
     }
 
     /// Read items from a dynamic output.
@@ -436,7 +401,7 @@ impl DynamicInput {
         count: WorkerCount,
         probe: &ProbeHandle<u64>,
         start_at: ResumeEpoch,
-    ) -> PyResult<Stream<S, TdPyAny>>
+    ) -> TdResult<Stream<S, TdPyAny>>
     where
         S: Scope<Timestamp = u64>,
     {
@@ -518,7 +483,7 @@ impl<'source> FromPyObject<'source> for StatelessSource {
             .extract()?;
         if !ob.is_instance(abc)? {
             Err(PyTypeError::new_err(
-                "stateful source derive from `bytewax.inputs.StatelessSource`",
+                "stateless source must derive from `bytewax.inputs.StatelessSource`",
             ))
         } else {
             Ok(Self(ob.into()))

@@ -16,8 +16,8 @@
 
 use crate::dataflow::{Dataflow, Step};
 use crate::errors::{
-    err_chain_thread, err_msg_thread, pyerr, pyerr_chain, pyerr_chain_thread, pyerr_msg_thread,
-    ByteErr, ByteError, ByteResult,
+    err_chain_thread, err_msg_thread, pyerr_chain, pyerr_chain_thread, pyerr_msg_thread, tderr,
+    StackRaiser, TdError, TdResult,
 };
 use crate::inputs::*;
 use crate::operators::collect_window::CollectWindowLogic;
@@ -110,7 +110,7 @@ fn build_production_dataflow<A, PW, SW>(
     mut progress_writer: PW,
     state_writer: SW,
     interrupt_flag: &'static AtomicBool,
-) -> ByteResult<ProbeHandle<u64>>
+) -> TdResult<ProbeHandle<u64>>
 where
     A: Allocate,
     PW: ProgressWriter + 'static,
@@ -163,10 +163,10 @@ where
 
                     let clock_builder = clock_config
                         .build(py)
-                        .pyerr::<PyRuntimeError>("can't build the clock config")?;
+                        .stack::<PyRuntimeError>("can't build the clock config")?;
                     let windower_builder = window_config
                         .build(py)
-                        .pyerr::<PyRuntimeError>("can't build the window config")?;
+                        .stack::<PyRuntimeError>("can't build the window config")?;
 
                     let (output, changes) = stream.map(extract_state_pair).stateful_window_unary(
                         step_id,
@@ -205,7 +205,7 @@ where
                             &probe,
                             resume_epoch,
                             step_resume_state,
-                        ).pyerr::<PyRuntimeError>("error building partitioned input")?;
+                        ).stack::<PyRuntimeError>("error building partitioned input")?;
 
                         inputs.push(output.clone());
                         stream = output;
@@ -220,12 +220,12 @@ where
                             worker_count,
                             &probe,
                             resume_epoch,
-                        ).pyerr::<PyRuntimeError>("error building dynamic input")?;
+                        ).stack::<PyRuntimeError>("error building dynamic input")?;
 
                         inputs.push(output.clone());
                         stream = output;
                     } else {
-                        return Err(PyTypeError::new_err("unknown input type"))
+                        return Err(tderr::<PyTypeError>("unknown input type"))
                     }
                 }
                 Step::Map { mapper } => {
@@ -251,8 +251,8 @@ where
                 } => {
                     let step_resume_state = resume_state.remove(&step_id);
 
-                    let clock_builder = clock_config.build(py).pyerr::<PyRuntimeError>("error building clock")?;
-                    let windower_builder = window_config.build(py).pyerr::<PyRuntimeError>("error building window")?;
+                    let clock_builder = clock_config.build(py).stack::<PyRuntimeError>("error building clock")?;
+                    let windower_builder = window_config.build(py).stack::<PyRuntimeError>("error building window")?;
 
                     let (output, changes) = stream.map(extract_state_pair).stateful_window_unary(
                         step_id,
@@ -304,8 +304,8 @@ where
                 } => {
                     let step_resume_state = resume_state.remove(&step_id);
 
-                    let clock_builder = clock_config.build(py).pyerr::<PyRuntimeError>("error building clock")?;
-                    let windower_builder = window_config.build(py).pyerr::<PyRuntimeError>("error building window")?;
+                    let clock_builder = clock_config.build(py).stack::<PyRuntimeError>("error building clock")?;
+                    let windower_builder = window_config.build(py).stack::<PyRuntimeError>("error building window")?;
 
                     let (output, changes) = stream.map(extract_state_pair).stateful_window_unary(
                         step_id,
@@ -354,7 +354,7 @@ where
                                 worker_index,
                                 worker_count,
                                 step_resume_state,
-                            ).pyerr::<PyRuntimeError>("error building partitioned output")?;
+                            ).stack::<PyRuntimeError>("error building partitioned output")?;
                         let clock = output.map(|_| ());
 
                         outputs.push(clock.clone());
@@ -368,23 +368,23 @@ where
                                 output,
                                 worker_index,
                                 worker_count,
-                            ).pyerr::<PyRuntimeError>("error building dynamic output")?;
+                            ).stack::<PyRuntimeError>("error building dynamic output")?;
                         let clock = output.map(|_| ());
 
                         outputs.push(clock.clone());
                         stream = output;
                     } else {
-                        return Err(pyerr::<PyTypeError>("unknown output type"));
+                        return Err(tderr::<PyTypeError>("unknown output type"));
                     }
                 }
             }
         }
 
         if inputs.is_empty() {
-            return Err(pyerr::<PyValueError>("Dataflow needs to contain at least one input"));
+            return Err(tderr::<PyValueError>("Dataflow needs to contain at least one input"));
         }
         if outputs.is_empty() {
-            return Err(pyerr::<PyValueError>("Dataflow needs to contain at least one output"));
+            return Err(tderr::<PyValueError>("Dataflow needs to contain at least one output"));
         }
         if !resume_state.is_empty() {
             tracing::warn!(
@@ -444,7 +444,7 @@ fn run_until_done<A: Allocate, T: Timestamp>(
     worker: &mut Worker<A>,
     interrupt_flag: &AtomicBool,
     probe: ProbeHandle<T>,
-) -> ByteResult<()> {
+) -> TdResult<()> {
     let mut span = PeriodicSpan::new(Duration::from_secs(10));
     while !FLAG.load(Ordering::Relaxed) && !probe.done() {
         println!("Step {} {}", worker.index(), FLAG.load(Ordering::Relaxed));
@@ -452,7 +452,7 @@ fn run_until_done<A: Allocate, T: Timestamp>(
             worker.step();
         }));
         if let Err(err) = res {
-            let err = err.downcast::<ByteError>().unwrap();
+            let err = err.downcast::<TdError>().unwrap();
             eprintln!("CIAO {err}");
             interrupt_flag.store(true, Ordering::Relaxed);
             return Err(*err);
@@ -472,7 +472,7 @@ fn build_and_run_progress_loading_dataflow<A, R>(
     worker: &mut Worker<A>,
     interrupt_flag: &AtomicBool,
     progress_reader: R,
-) -> ByteResult<InMemProgress>
+) -> TdResult<InMemProgress>
 where
     A: Allocate,
     R: ProgressReader + 'static,
@@ -493,7 +493,7 @@ fn build_and_run_state_loading_dataflow<A, R>(
     interrupt_flag: &AtomicBool,
     resume_epoch: ResumeEpoch,
     state_reader: R,
-) -> ByteResult<(FlowStateBytes, StoreSummary)>
+) -> TdResult<(FlowStateBytes, StoreSummary)>
 where
     A: Allocate,
     R: StateReader + 'static,
@@ -525,7 +525,7 @@ fn build_and_run_production_dataflow<A, PW, SW>(
     store_summary: StoreSummary,
     progress_writer: PW,
     state_writer: SW,
-) -> ByteResult<()>
+) -> TdResult<()>
 where
     A: Allocate,
     PW: ProgressWriter + 'static,
@@ -559,7 +559,7 @@ where
             state_writer,
             interrupt_flag,
         )
-        .pyerr::<PyRuntimeError>("Error building dataflow")
+        .stack::<PyRuntimeError>("Error building dataflow")
     })?;
     span.exit();
 
@@ -586,7 +586,7 @@ fn worker_main<A: Allocate>(
     flow: Py<Dataflow>,
     epoch_interval: Option<EpochInterval>,
     recovery_config: Option<Py<RecoveryConfig>>,
-) -> ByteResult<()> {
+) -> TdResult<()> {
     // Modify traceback to specify it's a python error
     // XXX: Sure this is a good idea?
     Python::with_gil(|py| {
@@ -608,7 +608,7 @@ sys.excepthook = exception_handler
             None,
         )
     })
-    .pyerr::<PyRuntimeError>("error running custom exception handler hook")?;
+    .stack::<PyRuntimeError>("error running custom exception handler hook")?;
 
     let worker_index = worker.index();
     let worker_count = worker.peers();
@@ -623,11 +623,11 @@ sys.excepthook = exception_handler
     let (progress_reader, state_reader) = Python::with_gil(|py| {
         build_recovery_readers(py, worker_index, worker_count, recovery_config.clone())
     })
-    .pyerr::<PyRuntimeError>("error building recovery readers")?;
+    .stack::<PyRuntimeError>("error building recovery readers")?;
     let (progress_writer, state_writer) = Python::with_gil(|py| {
         build_recovery_writers(py, worker_index, worker_count, recovery_config)
     })
-    .pyerr::<PyRuntimeError>("error building recovery writers")?;
+    .stack::<PyRuntimeError>("error building recovery writers")?;
 
     let span = tracing::trace_span!("Resume epoch").entered();
     let resume_progress =
@@ -715,31 +715,31 @@ pub(crate) fn run_main(
             // to a String. Then we could "raise" Python errors from
             // the builder directly. Probably also as part of the
             // panic recast issue below.
-            timely::execute::execute_directly::<ByteResult<()>, _>(move |worker| {
+            timely::execute::execute_directly::<TdResult<()>, _>(move |worker| {
                 worker_main(worker, &FLAG, flow, epoch_interval, recovery_config)
             })
         })
     });
 
     match result {
-        Ok(Ok(_)) => ByteResult::Ok(()),
-        Ok(err) => err.pyerr::<PyValueError>("Error building Dataflow"),
+        Ok(Ok(_)) => PyResult::Ok(()),
+        // Ok(err) => err.raise::<PyValueError>("Error executing Dataflow"),
+        Ok(Err(err)) => Err(err.as_pyerr()),
         Err(panic_err) => {
             // Here the worker either crashed with a PyErr or panicked in Rust.
             // We can differentiate the 2 situations by trying to downcast the panic
             // to a PyErr. If that doesn't work, we assume the worker crashed
             // on the Rust side of the moon.
-            let err = if let Some(err) = panic_err.downcast_ref::<ByteError>() {
-                pyerr_chain::<PyRuntimeError>(py, "Worker crashed", &err.0)
+            let err = if let Some(err) = panic_err.downcast_ref::<TdError>() {
+                pyerr_chain::<PyRuntimeError>(py, "Worker crashed", err.as_pyerr_ref())
             } else if let Some(err) = panic_err.downcast_ref::<String>() {
                 err_chain_thread::<PyRuntimeError>("Worker panicked in Rust code", &err)
             } else {
                 err_chain_thread::<PyRuntimeError>("Worker panicked in Rust code", "uknown error")
             };
-            Err(err)
+            Err(err.as_pyerr())
         }
     }
-    .map_err(|err| err.0)
 }
 
 /// Execute a dataflow in the current process as part of a cluster.
@@ -823,7 +823,7 @@ pub(crate) fn cluster_main(
             }
         }
         .try_build()
-        .pyerr_thread::<PyRuntimeError>("Error building cluster")?;
+        .raise::<PyRuntimeError>("Error building cluster")?;
 
         // let should_shutdown = Arc::new(AtomicBool::new(false));
         // let should_shutdown_w = should_shutdown.clone();
@@ -840,8 +840,8 @@ pub(crate) fn cluster_main(
             let mut stderr = std::io::stderr().lock();
             let msg = if let Some(pyerr) = info.payload().downcast_ref::<PyErr>() {
                 Python::with_gil(|py| pyerr_msg_thread(py, pyerr))
-            } else if let Some(err) = info.payload().downcast_ref::<ByteError>() {
-                Python::with_gil(|py| pyerr_msg_thread(py, &err.0))
+            } else if let Some(err) = info.payload().downcast_ref::<TdError>() {
+                Python::with_gil(|py| pyerr_msg_thread(py, &err.as_pyerr_ref()))
             } else if let Some(err) = info.payload().downcast_ref::<&str>() {
                 err_msg_thread(err)
             } else if let Some(err) = info.payload().downcast_ref::<String>() {
@@ -853,7 +853,7 @@ pub(crate) fn cluster_main(
                 .write_all(format!("{msg}\n").as_bytes())
                 .unwrap_or_else(|err| eprintln!("Error printing error (that's not good): {err}"));
         }));
-        let guards = timely::execute::execute_from::<_, ByteResult<()>, _>(
+        let guards = timely::execute::execute_from::<_, TdResult<()>, _>(
             builders,
             other,
             timely::WorkerConfig::default(),
@@ -867,7 +867,7 @@ pub(crate) fn cluster_main(
                 )
             },
         )
-        .pyerr_thread::<PyRuntimeError>("Error while running the cluster")?;
+        .raise::<PyRuntimeError>("Error while running the cluster")?;
         // .map_err(|err| {
         //     err_chain_thread::<PyRuntimeError>("Error while running cluster", &err).as_pyerr()
         // })?;
@@ -894,14 +894,14 @@ pub(crate) fn cluster_main(
             // do graceful shutdown.
             match maybe_worker_panic {
                 Ok(Ok(ok)) => Ok(ok),
-                Ok(err) => err.pyerr::<PyRuntimeError>("Error building Dataflow"),
+                Ok(err) => err.stack::<PyRuntimeError>("Error building Dataflow"),
                 // Here we ignore _panic_err since it's an Any
                 // without a useful representation.
-                Err(_panic_err) => Err(pyerr::<PyRuntimeError>(
+                Err(_panic_err) => Err(tderr::<PyRuntimeError>(
                     "Worker thread panicked, see error above",
                 )),
             }
-            .map_err(|err| err.0)?;
+            .map_err(|err| err.as_pyerr())?;
         }
 
         Ok(())
