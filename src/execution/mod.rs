@@ -832,20 +832,20 @@ pub(crate) fn cluster_main(
         // types to offer better info, and default to the original info.
         std::panic::set_hook(Box::new(move |info| {
             should_shutdown_p.store(true, Ordering::Relaxed);
-            // Acquire stdout lock and write the string as bytes,
-            // so we avoid interleaving outputs from different threads.
-            let mut stderr = std::io::stderr().lock();
             let msg = if let Some(pyerr) = info.payload().downcast_ref::<PyErr>() {
                 Python::with_gil(|py| pyerr_msg_thread(py, pyerr))
             } else if let Some(err) = info.payload().downcast_ref::<TdError>() {
-                Python::with_gil(|py| pyerr_msg_thread(py, &err.as_pyerr_ref()))
+                err.msg_with_tname()
             } else if let Some(err) = info.payload().downcast_ref::<&str>() {
                 err_msg_thread(err)
             } else if let Some(err) = info.payload().downcast_ref::<String>() {
                 err_msg_thread(err)
             } else {
-                format!("{}\n", info)
+                format!("{}", info)
             };
+            // Acquire stdout lock and write the string as bytes,
+            // so we avoid interleaving outputs from different threads (i think?).
+            let mut stderr = std::io::stderr().lock();
             stderr
                 .write_all(format!("{msg}\n").as_bytes())
                 .unwrap_or_else(|err| eprintln!("Error printing error (that's not good): {err}"));
@@ -876,10 +876,12 @@ pub(crate) fn cluster_main(
             .any(|worker_thread| !worker_thread.is_finished())
         {
             thread::sleep(Duration::from_millis(1));
-            Python::with_gil(|py| Python::check_signals(py)).map_err(|err| {
-                should_shutdown.store(true, Ordering::Relaxed);
-                err
-            })?;
+            Python::with_gil(|py| Python::check_signals(py))
+                .map_err(|err| {
+                    should_shutdown.store(true, Ordering::Relaxed);
+                    err
+                })
+                .raise_pyerr::<PyRuntimeError>("Error in worker")?;
         }
         for maybe_worker_panic in guards.join() {
             // TODO: See if we can PR Timely to not cast panic info to
@@ -889,14 +891,13 @@ pub(crate) fn cluster_main(
             // do graceful shutdown.
             match maybe_worker_panic {
                 Ok(Ok(ok)) => Ok(ok),
-                Ok(err) => err.raises::<PyRuntimeError>("Error building Dataflow"),
+                Ok(err) => err.raise_pyerr::<PyRuntimeError>("Error building Dataflow"),
                 // Here we ignore _panic_err since it's an Any
                 // without a useful representation.
-                Err(_panic_err) => Err(tderr::<PyRuntimeError>(
+                Err(_panic_err) => Err(PyErr::new::<PyRuntimeError, _>(
                     "Worker thread panicked, see error above",
                 )),
-            }
-            .map_err(|err| err.as_pyerr())?;
+            }?
         }
 
         Ok(())

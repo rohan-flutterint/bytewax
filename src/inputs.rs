@@ -430,7 +430,7 @@ impl DynamicInput {
                     if !probe.less_than(epoch) {
                         match unwrap_any!(Python::with_gil(|py| source
                             .next(py)
-                            .raises::<PyValueError>("Error getting input")))
+                            .raises::<PyValueError>("error getting input")))
                         {
                             Poll::Pending => {}
                             Poll::Ready(None) => {

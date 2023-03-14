@@ -14,16 +14,15 @@ use pyo3::{PyErr, PyResult, PyTypeInfo, Python};
 pub(crate) struct TdError(PyErr);
 
 impl TdError {
+    /// Call PyErr::clone_ref and build a new cloned TdError
     pub fn clone_ref(&self, py: Python) -> Self {
         Self(self.0.clone_ref(py))
     }
 
-    pub fn as_pyerr(self) -> PyErr {
-        self.0
-    }
-
-    pub fn as_pyerr_ref(&self) -> &PyErr {
-        &self.0
+    /// Return the message string with the thread
+    /// name as prefix to each line.
+    pub fn msg_with_tname(&self) -> String {
+        prepend_tname(self.to_string())
     }
 }
 
@@ -43,12 +42,23 @@ impl Error for TdError {
 pub(crate) type TdResult<T> = Result<T, TdError>;
 
 pub(crate) trait StackRaiser<T> {
-    /// This function converts self (which should be a Result) to Result<T, PyErr>
-    fn as_pyresult<PyErrType: PyTypeInfo>(self) -> Result<T, PyErr>;
+    /// This function converts self (which should be a Result) to PyResult
+    fn as_pyresult<PyErrType: PyTypeInfo>(self) -> PyResult<T>;
 
     /// Call this when you want to add this error
     /// to the stack trace and bubble it up.
     fn raises<PyErrType: PyTypeInfo>(self, msg: &str) -> TdResult<T>;
+
+    /// Only call this when you want to raise an error
+    /// directly to the python interpreter.
+    /// This should only be used on functions that will be directly
+    /// called from Python.
+    fn raise_pyerr<PyErrType: PyTypeInfo>(self, msg: &str) -> PyResult<T>
+    where
+        Self: Sized,
+    {
+        self.raises::<PyErrType>(msg).as_pyresult::<PyErrType>()
+    }
 
     fn _raise<PyErrType: PyTypeInfo>(self, msg: &str, caller: &Location) -> TdResult<T>
     where
