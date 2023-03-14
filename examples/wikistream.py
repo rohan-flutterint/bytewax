@@ -23,12 +23,13 @@ from bytewax.window import SystemClockConfig, SessionWindow
 # )
 
 
-class WikiSource:
+class WikiSource(StatelessSource):
     def __init__(self, client, events):
         self.client = client
         self.events = events
 
     def next(self):
+        raise Exception("BOOM")
         next(self.events)
 
     def close(self):

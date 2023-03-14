@@ -3,7 +3,7 @@
 //! For a user-centric version of input, read the `bytewax.inputs`
 //! Python module docstring. Read that first.
 
-use crate::errors::{StackRaiser, TdResult};
+use crate::errors::{raise, tderr, StackRaiser, TdResult};
 use crate::execution::{WorkerCount, WorkerIndex};
 use crate::pyo3_extensions::TdPyAny;
 use crate::recovery::model::*;
@@ -112,9 +112,9 @@ impl PartitionedInput {
         let keys: BTreeSet<StateKey> = self
             .0
             .call_method0(py, "list_parts")
-            .stack::<PyRuntimeError>("error calling 'list_parts'")?
+            .raises::<PyRuntimeError>("error calling 'list_parts'")?
             .extract(py)
-            .stack::<PyValueError>("'list_parts' should return a set of strings (not a list)")?;
+            .raises::<PyValueError>("'list_parts' should return a set of strings (not a list)")?;
 
         let parts = keys
             .into_iter()
@@ -138,7 +138,7 @@ impl PartitionedInput {
                 }
             })
             .collect::<PyResult<HashMap<StateKey, StatefulSource>>>()
-            .stack::<PyRuntimeError>("error building input parts")?;
+            .raises::<PyRuntimeError>("error building input parts")?;
 
         if !resume_state.is_empty() {
             tracing::warn!(
@@ -177,7 +177,7 @@ impl PartitionedInput {
     {
         let mut parts = self
             .build(py, step_id.clone(), index, count, resume_state)
-            .stack::<PyRuntimeError>("error building parts")?;
+            .raises::<PyRuntimeError>("error building parts")?;
         let bundle_size = parts.len();
         let mut op_builder = OperatorBuilder::new(step_id.0.clone(), scope.clone());
 
@@ -382,9 +382,9 @@ impl DynamicInput {
     ) -> TdResult<StatelessSource> {
         self.0
             .call_method1(py, "build", (index, count))
-            .stack::<PyRuntimeError>("error while calling 'DynamicInput.build'")?
+            .raises::<PyRuntimeError>("error while calling 'DynamicInput.build'")?
             .extract(py)
-            .stack::<PyValueError>("build method did not return a 'StatelessSource'")
+            .raises::<PyValueError>("'DynamicInput.build' did not return a 'StatelessSource'")
     }
 
     /// Read items from a dynamic output.
@@ -428,7 +428,10 @@ impl DynamicInput {
                     let mut eof = false;
 
                     if !probe.less_than(epoch) {
-                        match unwrap_any!(Python::with_gil(|py| source.next(py))) {
+                        match unwrap_any!(Python::with_gil(|py| source
+                            .next(py)
+                            .raises::<PyValueError>("Error getting input")))
+                        {
                             Poll::Pending => {}
                             Poll::Ready(None) => {
                                 eof = true;
@@ -482,7 +485,7 @@ impl<'source> FromPyObject<'source> for StatelessSource {
             .getattr("StatelessSource")?
             .extract()?;
         if !ob.is_instance(abc)? {
-            Err(PyTypeError::new_err(
+            Err(raise::<PyTypeError>(
                 "stateless source must derive from `bytewax.inputs.StatelessSource`",
             ))
         } else {

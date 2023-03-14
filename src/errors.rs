@@ -14,6 +14,10 @@ use pyo3::{PyErr, PyResult, PyTypeInfo, Python};
 pub(crate) struct TdError(PyErr);
 
 impl TdError {
+    pub fn clone_ref(&self, py: Python) -> Self {
+        Self(self.0.clone_ref(py))
+    }
+
     pub fn as_pyerr(self) -> PyErr {
         self.0
     }
@@ -40,102 +44,63 @@ pub(crate) type TdResult<T> = Result<T, TdError>;
 
 pub(crate) trait StackRaiser<T> {
     /// This function converts self (which should be a Result) to Result<T, PyErr>
-    fn map_pyerr<PyErrType: PyTypeInfo>(self) -> Result<T, PyErr>;
+    fn as_pyresult<PyErrType: PyTypeInfo>(self) -> Result<T, PyErr>;
+
     /// Call this when you want to add this error
     /// to the stack trace and bubble it up.
-    fn stack<PyErrType: PyTypeInfo>(self, msg: &str) -> TdResult<T>;
-    /// Call this when you want to propagate the error to Python.
-    fn raise<PyErrType: PyTypeInfo>(self, msg: &str) -> PyResult<T>;
+    fn raises<PyErrType: PyTypeInfo>(self, msg: &str) -> TdResult<T>;
 
-    fn _stack<PyErrType: PyTypeInfo>(self, msg: &str, caller: &Location) -> TdResult<T>
+    fn _raise<PyErrType: PyTypeInfo>(self, msg: &str, caller: &Location) -> TdResult<T>
     where
         Self: Sized,
     {
-        self.map_pyerr::<PyErrType>().map_err(|err| {
+        self.as_pyresult::<PyErrType>().map_err(|err| {
             Python::with_gil(|py| {
-                let err = PyErr::new::<PyErrType, _>(format!("({caller}) {err}"));
+                let msg: String = format!("({caller}) {msg}");
                 let err_msg: String = if let Some(tb) = get_traceback(py, &err) {
                     format!("{err}\n{tb}")
                 } else {
                     format!("{err}")
                 };
-                err_chain::<PyErrType>(msg, &err_msg)
-            })
-        })
-    }
-
-    fn _raise<PyErrType: PyTypeInfo>(self, msg: &str, caller: &Location) -> PyResult<T>
-    where
-        Self: Sized,
-    {
-        self.map_pyerr::<PyErrType>().map_err(|err| {
-            Python::with_gil(|py| {
-                let err = &PyErr::new::<PyErrType, _>(err);
-                let err_msg: String = if let Some(tb) = get_traceback(py, err) {
-                    prepend_tname(format!("({caller}) {err}\n{tb}"))
-                } else {
-                    prepend_tname(format!("({caller}) {err}"))
-                };
-                err_chain::<PyErrType>(msg, &err_msg).as_pyerr()
+                err_chain::<PyErrType>(&msg, &err_msg)
             })
         })
     }
 }
 
 impl<T> StackRaiser<T> for Result<T, String> {
-    fn map_pyerr<PyErrType: PyTypeInfo>(self) -> Result<T, PyErr> {
+    fn as_pyresult<PyErrType: PyTypeInfo>(self) -> Result<T, PyErr> {
         self.map_err(|err| PyErr::new::<PyErrType, _>(err))
     }
 
     #[track_caller]
-    fn stack<PyErrType: PyTypeInfo>(self, msg: &str) -> TdResult<T> {
+    fn raises<PyErrType: PyTypeInfo>(self, msg: &str) -> TdResult<T> {
         let caller = std::panic::Location::caller();
-        self._stack::<PyErrType>(msg, caller)
-    }
-
-    #[track_caller]
-    fn raise<PyErrType: PyTypeInfo>(self, msg: &str) -> PyResult<T> {
-        let caller = std::panic::Location::caller();
-        self._stack::<PyErrType>(msg, caller)
-            .map_err(|err| err.as_pyerr())
+        self._raise::<PyErrType>(msg, caller)
     }
 }
 
 impl<T> StackRaiser<T> for PyResult<T> {
-    fn map_pyerr<PyErrType: PyTypeInfo>(self) -> Result<T, PyErr> {
+    fn as_pyresult<PyErrType: PyTypeInfo>(self) -> Result<T, PyErr> {
         self
     }
 
     #[track_caller]
-    fn stack<PyErrType: PyTypeInfo>(self, msg: &str) -> TdResult<T> {
+    fn raises<PyErrType: PyTypeInfo>(self, msg: &str) -> TdResult<T> {
         let caller = std::panic::Location::caller();
-        self._stack::<PyErrType>(msg, caller)
-    }
-
-    #[track_caller]
-    fn raise<PyErrType: PyTypeInfo>(self, msg: &str) -> PyResult<T> {
-        let caller = std::panic::Location::caller();
-        self._stack::<PyErrType>(msg, caller)
-            .map_err(|err| err.as_pyerr())
+        self._raise::<PyErrType>(msg, caller)
     }
 }
 
 impl<T> StackRaiser<T> for TdResult<T> {
-    fn map_pyerr<PyErrType: PyTypeInfo>(self) -> Result<T, PyErr> {
+    fn as_pyresult<PyErrType: PyTypeInfo>(self) -> Result<T, PyErr> {
         self.map_err(|err| err.0)
     }
 
     #[track_caller]
-    fn stack<PyErrType: PyTypeInfo>(self, msg: &str) -> TdResult<T> {
+    fn raises<PyErrType: PyTypeInfo>(self, msg: &str) -> TdResult<T> {
         let caller = std::panic::Location::caller();
-        self._stack::<PyErrType>(msg, caller)
-    }
-
-    #[track_caller]
-    fn raise<PyErrType: PyTypeInfo>(self, msg: &str) -> PyResult<T> {
-        let caller = std::panic::Location::caller();
-        self._stack::<PyErrType>(msg, caller)
-            .map_err(|err| err.as_pyerr())
+        self._raise::<PyErrType>(msg, caller)
     }
 }
 
@@ -144,6 +109,13 @@ impl<T> StackRaiser<T> for TdResult<T> {
 pub(crate) fn tderr<T: PyTypeInfo>(msg: &str) -> TdError {
     let caller = std::panic::Location::caller();
     TdError(PyErr::new::<T, _>(format!("({caller}) {msg}")))
+}
+
+/// Creates a PyErr of the given Python type tracking the caller
+#[track_caller]
+pub(crate) fn raise<T: PyTypeInfo>(msg: &str) -> PyErr {
+    let caller = std::panic::Location::caller();
+    PyErr::new::<T, _>(format!("({caller}) {msg}"))
 }
 
 /// Prepend the name of the current thread to each line,
@@ -182,34 +154,15 @@ fn err_chain<T: PyTypeInfo>(msg: &str, err: &str) -> TdError {
     TdError(PyErr::new::<T, _>(format!("{msg}\nCaused by => {err}")))
 }
 
-/// Chain an error msg with another string, adding track_caller info and thread name.
-#[track_caller]
-pub(crate) fn err_chain_thread<T: PyTypeInfo>(msg: &str, err: &str) -> TdError {
-    let caller = std::panic::Location::caller();
-    let err_msg = prepend_tname(format!("\n({caller}) {msg}"));
-    err_chain::<T>(&err_msg, err)
-}
-
-/// Chain an error msg with a PyErr, adding track_caller info and the traceback if present.
-#[track_caller]
-pub(crate) fn pyerr_chain<T: PyTypeInfo>(py: Python, msg: &str, err: &PyErr) -> TdError {
-    let caller = std::panic::Location::caller();
-    let err_msg: String = if let Some(tb) = get_traceback(py, err) {
-        format!("({caller}) {err}\n{tb}")
-    } else {
-        format!("({caller}) {err}")
-    };
-    err_chain::<T>(msg, &err_msg)
-}
-
 /// Chain an error msg with a PyErr, adding track_caller info, traceback and thread name.
 #[track_caller]
 pub(crate) fn pyerr_chain_thread<T: PyTypeInfo>(py: Python, msg: &str, err: &PyErr) -> TdError {
     let caller = std::panic::Location::caller();
-    let err_msg: String = if let Some(tb) = get_traceback(py, err) {
-        prepend_tname(format!("({caller}) {err}\n{tb}"))
-    } else {
-        prepend_tname(format!("({caller}) {err}"))
-    };
-    err_chain::<T>(msg, &err_msg)
+    let msg: String = format!("({caller}) {msg}");
+    let err_msg: String = prepend_tname(
+        get_traceback(py, err)
+            .map(|tb| format!("{err}\n{tb}"))
+            .unwrap_or_else(|| format!("{err}")),
+    );
+    err_chain::<T>(&msg, &err_msg)
 }
